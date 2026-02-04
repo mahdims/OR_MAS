@@ -1,0 +1,26 @@
+# Core LLM dependencies
+openai>=1.0.0
+google-generativeai>=0.3.0
+instructor>=1.0.0
+
+# Data validation
+pydantic>=2.0.0
+
+# Logging and utilities
+structlog>=24.0.0
+tenacity>=8.0.0
+python-dotenv>=1.0.0
+
+# Orchestration
+langgraph>=0.0.30
+
+# Optimization
+pyomo>=6.6.0
+numpy>=1.24.0
+
+# Development dependencies (optional)
+# pytest>=7.0.0
+# pytest-asyncio>=0.21.0
+# black>=23.0.0
+# ruff>=0.1.0
+# mypy>=1.0.0

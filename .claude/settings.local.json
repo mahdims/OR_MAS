@@ -1,9 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(mkdir:*)"
-    ],
-    "deny": [],
-    "ask": []
+      "Bash(dir:*)",
+      "Bash(tree:*)",
+      "Read(//e/Work/EfficentModelingMAS/**)"
+    ]
   }
 }
