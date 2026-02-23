@@ -63,11 +63,12 @@ class LLMClient:
         """Generate structured output using any LLM provider."""
         try:
             if self.provider == "gemini":
-                combined_prompt = f"{sys_prompt}\n\n{user_prompt}"
-                result = self.client.generate_content(
-                    combined_prompt,
-                    response_model=pyd_model,
-                    temperature=temperature
+                result = self.client.chat.completions.create(
+                    messages=[
+                        {"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_model=pyd_model
                 )
             else:
                 result = self.client.chat.completions.create(
