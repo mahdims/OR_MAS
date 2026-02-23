@@ -6,6 +6,7 @@ from ..prompts import PROMPTS
 
 logger = structlog.get_logger(__name__)
 
+
 async def a3_mathifier(state: ModelPack) -> ModelPack:
     """A3 - Mathifier: Convert NL components to mathematical notation."""
 
@@ -27,18 +28,20 @@ Convert to mathematical notation in LaTeX. Preserve variable types (integer/cont
             sys_prompt=PROMPTS["A3_mathifier"]["system"],
             user_prompt=user_prompt,
             pyd_model=ComponentsMATH,
-            temperature=0.5
+            temperature=0.5,
         )
 
         # Set objective sense from context
         if not math_components.sense:
-            math_components.sense = state.context.get('objective_sense', 'min')
+            math_components.sense = state.context.get("objective_sense", "min")
 
         state.components_math = math_components
 
-        logger.info("a3_mathifier_success",
-                   indices=len(math_components.indices),
-                   constraints=len(math_components.constraints))
+        logger.info(
+            "a3_mathifier_success",
+            indices=len(math_components.indices),
+            constraints=len(math_components.constraints),
+        )
 
     except Exception as e:
         logger.error("a3_mathifier_error", error=str(e))

@@ -8,6 +8,7 @@ from .utils import load_modules_with_shared_namespace, resolve_solver
 
 logger = structlog.get_logger(__name__)
 
+
 async def a6_screen(state: ModelPack) -> ModelPack:
     """A6 - Feasibility Screener with comprehensive error handling."""
 
@@ -26,8 +27,8 @@ async def a6_screen(state: ModelPack) -> ModelPack:
         # Load all modules in shared namespace
         namespace = load_modules_with_shared_namespace(state.code)
 
-        DataGen = namespace.get('DataGen')
-        ModelBuilder = namespace.get('ModelBuilder')
+        DataGen = namespace.get("DataGen")
+        ModelBuilder = namespace.get("ModelBuilder")
 
         if not DataGen or not ModelBuilder:
             raise ValueError("DataGen or ModelBuilder not found in namespace")
@@ -68,7 +69,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                     issue=feedback_issue,
                     evidence={"error": error_str},
                     proposed_fix=fix,
-                    retry_count=retry_count
+                    retry_count=retry_count,
                 )
                 state.tests["retry_counts"][retry_key] = retry_count + 1
                 return state
@@ -85,18 +86,20 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                     "error_type": type(pyomo_error).__name__,
                     "error_message": error_str,
                     "traceback": error_trace[:1500],
-                    "retry_attempt": retry_count + 1
+                    "retry_attempt": retry_count + 1,
                 },
                 proposed_fix=fix,
-                retry_count=retry_count
+                retry_count=retry_count,
             )
 
             state.tests["last_feedback"] = feedback
             state.tests["retry_counts"][retry_key] = retry_count + 1
 
-            logger.warning("a6_model_build_failed",
-                         error_type=type(pyomo_error).__name__,
-                         retry=retry_count + 1)
+            logger.warning(
+                "a6_model_build_failed",
+                error_type=type(pyomo_error).__name__,
+                retry=retry_count + 1,
+            )
             return state
 
         # If model builds, test feasibility
@@ -115,18 +118,24 @@ async def a6_screen(state: ModelPack) -> ModelPack:
 
                 results = solver.solve(model, tee=False, timelimit=10)
 
-                feasible = (results.solver.status == SolverStatus.ok and
-                           results.solver.termination_condition in
-                           [TerminationCondition.optimal, TerminationCondition.feasible])
+                feasible = (
+                    results.solver.status == SolverStatus.ok
+                    and results.solver.termination_condition
+                    in [TerminationCondition.optimal, TerminationCondition.feasible]
+                )
 
                 # Store instance
-                data_dict = vars(data) if hasattr(data, '__dict__') else {}
+                data_dict = vars(data) if hasattr(data, "__dict__") else {}
                 instance = TestInstance(
                     id=f"screen_{seed}",
                     data_dict=data_dict,
                     feasible=feasible,
                     solver_status=str(results.solver.termination_condition),
-                    objective_value=pyo.value(model.objective) if feasible and hasattr(model, 'objective') else None
+                    objective_value=(
+                        pyo.value(model.objective)
+                        if feasible and hasattr(model, "objective")
+                        else None
+                    ),
                 )
                 state.tests["instances"].append(instance)
 
@@ -146,21 +155,16 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                 source_agent="A6",
                 target_agent="A5",
                 issue="data_infeasible",
-                evidence={
-                    "infeasible_count": infeasible_count,
-                    "total_tested": 4
-                },
-                proposed_fix="Adjust data generation for feasibility"
+                evidence={"infeasible_count": infeasible_count, "total_tested": 4},
+                proposed_fix="Adjust data generation for feasibility",
             )
             state.tests["last_feedback"] = feedback
         else:
             state.tests["last_feedback"] = None
 
-        state.tests["logs"].append({
-            "agent": "A6",
-            "status": "success",
-            "feasible_count": 4 - infeasible_count
-        })
+        state.tests["logs"].append(
+            {"agent": "A6", "status": "success", "feasible_count": 4 - infeasible_count}
+        )
 
     except Exception as e:
         logger.error("a6_screen_error", error=str(e))

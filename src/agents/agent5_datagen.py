@@ -6,6 +6,7 @@ from ..prompts import PROMPTS
 
 logger = structlog.get_logger(__name__)
 
+
 async def a5_datagen(state: ModelPack) -> ModelPack:
     """A5 - DataGen Author: Generate data generation code."""
 
@@ -57,14 +58,10 @@ Use float for nutritional/continuous values, not int."""
             sys_prompt=PROMPTS["A5_datagen"]["system"],
             user_prompt=user_prompt,
             temperature=0.3,
-            validate=True
+            validate=True,
         )
 
-        state.code.datagen = CodeBlob(
-            language="python",
-            filename="datagen.py",
-            source=code
-        )
+        state.code.datagen = CodeBlob(language="python", filename="datagen.py", source=code)
 
         logger.info("a5_datagen_success", code_length=len(code))
 

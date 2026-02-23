@@ -5,65 +5,87 @@ import structlog
 
 from ..schemas import ModelPack
 from ..agents import (
-    agent0_specifier, agent1_extractor, agent2_reviser,
-    agent3_mathifier, agent3b_data_extractor, agent3c_schema,
-    agent4_pyomo, agent5_datagen, agent6_screen,
-    agent7_checker, agent8_solver, agent9_judge
+    agent0_specifier,
+    agent1_extractor,
+    agent2_reviser,
+    agent3_mathifier,
+    agent3b_data_extractor,
+    agent3c_schema,
+    agent4_pyomo,
+    agent5_datagen,
+    agent6_screen,
+    agent7_checker,
+    agent8_solver,
+    agent9_judge,
 )
 
 logger = structlog.get_logger(__name__)
 
+
 class GraphState(TypedDict):
     model_pack: ModelPack
+
 
 # Wrapper functions
 async def run_a0(state: GraphState) -> GraphState:
     state["model_pack"] = await agent0_specifier.a0_specifier(state["model_pack"])
     return state
 
+
 async def run_a1(state: GraphState) -> GraphState:
     state["model_pack"] = await agent1_extractor.a1_extractor(state["model_pack"])
     return state
+
 
 async def run_a2(state: GraphState) -> GraphState:
     state["model_pack"] = await agent2_reviser.a2_reviser(state["model_pack"])
     return state
 
+
 async def run_a3(state: GraphState) -> GraphState:
     state["model_pack"] = await agent3_mathifier.a3_mathifier(state["model_pack"])
     return state
+
 
 async def run_a3b(state: GraphState) -> GraphState:
     state["model_pack"] = await agent3b_data_extractor.a3b_data_extractor(state["model_pack"])
     return state
 
+
 async def run_a3c(state: GraphState) -> GraphState:
     state["model_pack"] = await agent3c_schema.a3c_schema(state["model_pack"])
     return state
+
 
 async def run_a4(state: GraphState) -> GraphState:
     state["model_pack"] = await agent4_pyomo.a4_pyomo(state["model_pack"])
     return state
 
+
 async def run_a5(state: GraphState) -> GraphState:
     state["model_pack"] = await agent5_datagen.a5_datagen(state["model_pack"])
     return state
+
 
 async def run_a6(state: GraphState) -> GraphState:
     state["model_pack"] = await agent6_screen.a6_screen(state["model_pack"])
     return state
 
+
 async def run_a7(state: GraphState) -> GraphState:
     state["model_pack"] = await agent7_checker.a7_checker(state["model_pack"])
     return state
+
 
 async def run_a8(state: GraphState) -> GraphState:
     state["model_pack"] = await agent8_solver.a8_solver(state["model_pack"])
     return state
 
+
 async def run_a9(state: GraphState) -> GraphState:
     state["model_pack"] = await agent9_judge.a9_judge(state["model_pack"])
     return state
+
 
 # Routing functions with feedback loops
 def route_after_a6(state: GraphState) -> str:
@@ -80,6 +102,7 @@ def route_after_a6(state: GraphState) -> str:
 
     return "A7_checker"
 
+
 def route_after_a9(state: GraphState) -> str:
     """Route after cross-validation."""
     feedback = state["model_pack"].tests.get("last_feedback")
@@ -93,6 +116,7 @@ def route_after_a9(state: GraphState) -> str:
             return "A4_pyomo"
 
     return "END"
+
 
 def create_graph() -> StateGraph:
     """Create orchestration graph with feedback loops."""
@@ -130,11 +154,7 @@ def create_graph() -> StateGraph:
     graph.add_conditional_edges(
         "A6_screen",
         route_after_a6,
-        {
-            "A4_pyomo": "A4_pyomo",
-            "A5_datagen": "A5_datagen",
-            "A7_checker": "A7_checker"
-        }
+        {"A4_pyomo": "A4_pyomo", "A5_datagen": "A5_datagen", "A7_checker": "A7_checker"},
     )
 
     graph.add_conditional_edges(
@@ -144,14 +164,15 @@ def create_graph() -> StateGraph:
             "A7_checker": "A7_checker",
             "A5_datagen": "A5_datagen",
             "A4_pyomo": "A4_pyomo",
-            "END": END
-        }
+            "END": END,
+        },
     )
 
     # Set entry point
     graph.set_entry_point("A0_specifier")
 
     return graph
+
 
 def create_app():
     """Create compiled app without checkpointing."""

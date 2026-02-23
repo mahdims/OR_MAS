@@ -6,6 +6,7 @@ from ..prompts import PROMPTS
 
 logger = structlog.get_logger(__name__)
 
+
 async def a4_pyomo(state: ModelPack) -> ModelPack:
     """A4 - Pyomo Builder: Generate Pyomo model code."""
 
@@ -48,13 +49,11 @@ Constraints must return expressions, NOT True/False."""
             sys_prompt=PROMPTS["A4_pyomo"]["system"],
             user_prompt=user_prompt,
             temperature=0.3,
-            validate=True
+            validate=True,
         )
 
         state.code.model_builder = CodeBlob(
-            language="python",
-            filename="model_builder.py",
-            source=code
+            language="python", filename="model_builder.py", source=code
         )
 
         logger.info("a4_pyomo_success", code_length=len(code))

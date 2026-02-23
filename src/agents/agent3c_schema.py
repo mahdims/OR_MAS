@@ -6,6 +6,7 @@ from ..prompts import PROMPTS
 
 logger = structlog.get_logger(__name__)
 
+
 async def a3c_schema(state: ModelPack) -> ModelPack:
     """A3C - Schema Generator: Generate Data class structure."""
 
@@ -27,14 +28,10 @@ Use tuple keys for multi-indexed parameters."""
             sys_prompt=PROMPTS["A3C_schema"]["system"],
             user_prompt=user_prompt,
             temperature=0.3,
-            validate=True
+            validate=True,
         )
 
-        state.code.data_schema = CodeBlob(
-            language="python",
-            filename="data_schema.py",
-            source=code
-        )
+        state.code.data_schema = CodeBlob(language="python", filename="data_schema.py", source=code)
 
         logger.info("a3c_schema_success", code_length=len(code))
 

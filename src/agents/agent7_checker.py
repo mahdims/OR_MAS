@@ -6,6 +6,7 @@ from ..prompts import PROMPTS
 
 logger = structlog.get_logger(__name__)
 
+
 async def a7_checker(state: ModelPack) -> ModelPack:
     """A7 - Solution Checker Author: Generate constraint verification code."""
 
@@ -38,13 +39,11 @@ Return dict with 'feasible' (bool) and 'violations' (str)."""
             sys_prompt=PROMPTS["A7_checker"]["system"],
             user_prompt=user_prompt,
             temperature=0.3,
-            validate=True
+            validate=True,
         )
 
         state.code.solution_checker = CodeBlob(
-            language="python",
-            filename="solution_checker.py",
-            source=code
+            language="python", filename="solution_checker.py", source=code
         )
 
         logger.info("a7_checker_success", code_length=len(code))

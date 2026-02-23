@@ -6,6 +6,7 @@ from ..prompts import PROMPTS
 
 logger = structlog.get_logger(__name__)
 
+
 async def a0_specifier(state: ModelPack) -> ModelPack:
     """A0 - Specifier: Extract problem contract from NL."""
 
@@ -26,7 +27,7 @@ Extract the problem contract."""
             sys_prompt=PROMPTS["A0_specifier"]["system"],
             user_prompt=user_prompt,
             pyd_model=ContextContract,
-            temperature=0.5
+            temperature=0.5,
         )
 
         # Update context

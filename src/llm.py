@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 load_dotenv()
 logger = structlog.get_logger(__name__)
 
-T = TypeVar('T', bound=BaseModel)
+T = TypeVar("T", bound=BaseModel)
+
 
 class LLMClient:
     """Unified LLM client supporting multiple providers via instructor."""
@@ -23,7 +24,7 @@ class LLMClient:
         provider: str = None,
         model_name: str = None,
         api_key: str = None,
-        base_url: str = None
+        base_url: str = None,
     ):
         self.provider = provider or os.getenv("PROVIDER", "openai")
         self.model_name = model_name or os.getenv("MODEL_NAME", "gpt-4o-mini")
@@ -35,30 +36,16 @@ class LLMClient:
             genai.configure(api_key=self.api_key)
             base_client = genai.GenerativeModel(self.model_name or "gemini-1.5-pro")
             self.client = instructor.from_gemini(
-                client=base_client,
-                mode=instructor.Mode.GEMINI_JSON
+                client=base_client, mode=instructor.Mode.GEMINI_JSON
             )
         else:
             # OpenAI-compatible (OpenAI, DeepSeek, Qwen, local)
-            base_client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url
-            )
-            self.client = instructor.from_openai(
-                base_client,
-                mode=instructor.Mode.JSON
-            )
+            base_client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            self.client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=60)
-    )
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=60))
     def structured_call(
-        self,
-        sys_prompt: str,
-        user_prompt: str,
-        pyd_model: Type[T],
-        temperature: float = 0.7
+        self, sys_prompt: str, user_prompt: str, pyd_model: Type[T], temperature: float = 0.7
     ) -> T:
         """Generate structured output using any LLM provider."""
         try:
@@ -68,17 +55,17 @@ class LLMClient:
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    response_model=pyd_model
+                    response_model=pyd_model,
                 )
             else:
                 result = self.client.chat.completions.create(
                     model=self.model_name,
                     messages=[
                         {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_prompt}
+                        {"role": "user", "content": user_prompt},
                     ],
                     response_model=pyd_model,
-                    temperature=temperature
+                    temperature=temperature,
                 )
 
             logger.info("structured_call_success", provider=self.provider)
@@ -88,16 +75,9 @@ class LLMClient:
             logger.error("structured_call_error", provider=self.provider, error=str(e))
             raise
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=60)
-    )
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=60))
     def code_generation_call(
-        self,
-        sys_prompt: str,
-        user_prompt: str,
-        temperature: float = 0.3,
-        validate: bool = True
+        self, sys_prompt: str, user_prompt: str, temperature: float = 0.3, validate: bool = True
     ) -> str:
         """Generate code with optional validation."""
         try:
@@ -105,7 +85,7 @@ class LLMClient:
                 model = genai.GenerativeModel(self.model_name or "gemini-1.5-pro")
                 response = model.generate_content(
                     f"{sys_prompt}\n\n{user_prompt}",
-                    generation_config=genai.GenerationConfig(temperature=temperature)
+                    generation_config=genai.GenerationConfig(temperature=temperature),
                 )
                 code = response.text
             else:
@@ -114,9 +94,9 @@ class LLMClient:
                     model=self.model_name,
                     messages=[
                         {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_prompt}
+                        {"role": "user", "content": user_prompt},
                     ],
-                    temperature=temperature
+                    temperature=temperature,
                 )
                 code = response.choices[0].message.content
 
@@ -179,19 +159,20 @@ class LLMClient:
     def _fix_common_syntax_errors(self, code: str) -> str:
         """Fix common syntax errors in generated code."""
         # Fix string quotes in type hints
-        code = code.replace('"Optional[List[str]] = None,', 'Optional[List[str]] = None,')
-        code = code.replace('"Optional[List[str]] = None)', 'Optional[List[str]] = None)')
+        code = code.replace('"Optional[List[str]] = None,', "Optional[List[str]] = None,")
+        code = code.replace('"Optional[List[str]] = None)', "Optional[List[str]] = None)")
 
         # Fix f-string issues
-        lines = code.split('\n')
+        lines = code.split("\n")
         fixed_lines = []
         for line in lines:
-            if 'f"' in line and '\\' in line:
+            if 'f"' in line and "\\" in line:
                 # Replace backslashes in f-strings
-                line = line.replace('\\n', '" + "\\n" + "')
+                line = line.replace("\\n", '" + "\\n" + "')
             fixed_lines.append(line)
 
-        return '\n'.join(fixed_lines)
+        return "\n".join(fixed_lines)
+
 
 # Global client
 llm_client = LLMClient()

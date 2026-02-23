@@ -24,5 +24,5 @@ __all__ = [
     "agent6_screen",
     "agent7_checker",
     "agent8_solver",
-    "agent9_judge"
+    "agent9_judge",
 ]

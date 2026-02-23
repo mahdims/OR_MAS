@@ -6,6 +6,7 @@ from ..prompts import PROMPTS
 
 logger = structlog.get_logger(__name__)
 
+
 async def a1_extractor(state: ModelPack) -> ModelPack:
     """A1 - Extractor: Extract modeling components from NL."""
 
@@ -30,15 +31,17 @@ Extract all modeling components. Mark variable types appropriately (integer/cont
             sys_prompt=PROMPTS["A1_extractor"]["system"],
             user_prompt=user_prompt,
             pyd_model=ComponentsNL,
-            temperature=0.6
+            temperature=0.6,
         )
 
         state.components_nl = components
 
-        logger.info("a1_extractor_success",
-                   sets=len(components.sets),
-                   params=len(components.parameters),
-                   vars=len(components.variables))
+        logger.info(
+            "a1_extractor_success",
+            sets=len(components.sets),
+            params=len(components.parameters),
+            vars=len(components.variables),
+        )
 
     except Exception as e:
         logger.error("a1_extractor_error", error=str(e))

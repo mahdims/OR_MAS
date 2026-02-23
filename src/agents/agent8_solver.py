@@ -7,6 +7,7 @@ from .utils import load_modules_with_shared_namespace, resolve_solver
 
 logger = structlog.get_logger(__name__)
 
+
 async def a8_solver(state: ModelPack) -> ModelPack:
     """A8 - Solver: Run optimization and extract solutions."""
 
@@ -20,8 +21,8 @@ async def a8_solver(state: ModelPack) -> ModelPack:
         # Load modules
         namespace = load_modules_with_shared_namespace(state.code)
 
-        DataGen = namespace.get('DataGen')
-        ModelBuilder = namespace.get('ModelBuilder')
+        DataGen = namespace.get("DataGen")
+        ModelBuilder = namespace.get("ModelBuilder")
 
         if not DataGen or not ModelBuilder:
             raise ValueError("DataGen or ModelBuilder not found")
@@ -42,9 +43,11 @@ async def a8_solver(state: ModelPack) -> ModelPack:
 
                 results = solver.solve(model, tee=False, timelimit=30)
 
-                feasible = (results.solver.status == SolverStatus.ok and
-                           results.solver.termination_condition in
-                           [TerminationCondition.optimal, TerminationCondition.feasible])
+                feasible = (
+                    results.solver.status == SolverStatus.ok
+                    and results.solver.termination_condition
+                    in [TerminationCondition.optimal, TerminationCondition.feasible]
+                )
 
                 # Extract solution
                 solution_dict = {}
@@ -56,35 +59,36 @@ async def a8_solver(state: ModelPack) -> ModelPack:
                             solution_dict[var_name][str(index)] = pyo.value(var[index])
 
                 obj_value = None
-                if feasible and hasattr(model, 'objective'):
+                if feasible and hasattr(model, "objective"):
                     obj_value = pyo.value(model.objective)
 
                 # Store instance
-                data_dict = vars(data) if hasattr(data, '__dict__') else {}
+                data_dict = vars(data) if hasattr(data, "__dict__") else {}
                 instance = TestInstance(
                     id=f"solve_{seed}",
                     data_dict=data_dict,
                     solution_dict=solution_dict if feasible else None,
                     feasible=feasible,
                     solver_status=str(results.solver.termination_condition),
-                    objective_value=obj_value
+                    objective_value=obj_value,
                 )
 
                 state.tests["instances"].append(instance)
 
-                logger.info("a8_instance_solved",
-                           seed=seed,
-                           feasible=feasible,
-                           obj_value=obj_value)
+                logger.info("a8_instance_solved", seed=seed, feasible=feasible, obj_value=obj_value)
 
             except Exception as e:
                 logger.warning("a8_solve_failed", seed=seed, error=str(e))
 
-        state.tests["logs"].append({
-            "agent": "A8",
-            "status": "success",
-            "instances_solved": len([i for i in state.tests["instances"] if i.id.startswith("solve_")])
-        })
+        state.tests["logs"].append(
+            {
+                "agent": "A8",
+                "status": "success",
+                "instances_solved": len(
+                    [i for i in state.tests["instances"] if i.id.startswith("solve_")]
+                ),
+            }
+        )
 
     except Exception as e:
         logger.error("a8_solver_error", error=str(e))

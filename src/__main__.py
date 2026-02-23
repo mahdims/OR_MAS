@@ -1,4 +1,5 @@
 """Entry point for the Efficient Modeling Multi-Agent System."""
+
 import asyncio
 import argparse
 import structlog
@@ -38,26 +39,21 @@ def main():
     parser.add_argument(
         "input",
         nargs="?",
-        help="Path to file containing the problem description, or problem text directly"
+        help="Path to file containing the problem description, or problem text directly",
     )
     parser.add_argument(
-        "-o", "--output",
+        "-o",
+        "--output",
         default="output",
-        help="Output directory for generated code (default: output)"
+        help="Output directory for generated code (default: output)",
     )
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable verbose logging"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
 
     args = parser.parse_args()
 
     # Configure logging
     if args.verbose:
-        structlog.configure(
-            wrapper_class=structlog.make_filtering_bound_logger(0)
-        )
+        structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(0))
 
     # Get problem text
     if args.input:
@@ -70,6 +66,7 @@ def main():
     else:
         print("Enter your optimization problem (Ctrl+D or Ctrl+Z to finish):")
         import sys
+
         problem_text = sys.stdin.read()
 
     if not problem_text.strip():

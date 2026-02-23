@@ -7,6 +7,7 @@ import json
 
 logger = structlog.get_logger(__name__)
 
+
 async def a2_reviser(state: ModelPack) -> ModelPack:
     """A2 - Reviser: Refine extracted components using Reflexion."""
 
@@ -27,6 +28,7 @@ Review and refine. Be conservative - only fix clear issues."""
 
         # Create a combined model for response
         from pydantic import BaseModel
+
         class RevisedComponents(BaseModel):
             components: ComponentsNL
             meta: ComponentsNLMETA
@@ -35,7 +37,7 @@ Review and refine. Be conservative - only fix clear issues."""
             sys_prompt=PROMPTS["A2_reviser"]["system"],
             user_prompt=user_prompt,
             pyd_model=RevisedComponents,
-            temperature=0.5
+            temperature=0.5,
         )
 
         state.components_nl = revised.components

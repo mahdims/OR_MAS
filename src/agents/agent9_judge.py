@@ -5,6 +5,7 @@ from .utils import load_modules_with_shared_namespace
 
 logger = structlog.get_logger(__name__)
 
+
 async def a9_judge(state: ModelPack) -> ModelPack:
     """A9 - Judge: Cross-validate solver solutions against checker."""
 
@@ -19,7 +20,7 @@ async def a9_judge(state: ModelPack) -> ModelPack:
         # Load modules
         namespace = load_modules_with_shared_namespace(state.code)
 
-        SolutionChecker = namespace.get('SolutionChecker')
+        SolutionChecker = namespace.get("SolutionChecker")
 
         if not SolutionChecker:
             logger.warning("a9_checker_not_found")
@@ -27,8 +28,11 @@ async def a9_judge(state: ModelPack) -> ModelPack:
             return state
 
         # Get solved instances
-        solved_instances = [i for i in state.tests.get("instances", [])
-                          if i.id.startswith("solve_") and i.feasible and i.solution_dict]
+        solved_instances = [
+            i
+            for i in state.tests.get("instances", [])
+            if i.id.startswith("solve_") and i.feasible and i.solution_dict
+        ]
 
         if not solved_instances:
             logger.info("a9_no_solved_instances")
@@ -50,12 +54,14 @@ async def a9_judge(state: ModelPack) -> ModelPack:
 
                 if solver_feasible and not checker_feasible:
                     # False negative - checker rejected valid solution
-                    mismatches.append({
-                        "instance_id": instance.id,
-                        "solver_says": "feasible",
-                        "checker_says": "infeasible",
-                        "violations": result.get("violations", "")
-                    })
+                    mismatches.append(
+                        {
+                            "instance_id": instance.id,
+                            "solver_says": "feasible",
+                            "checker_says": "infeasible",
+                            "violations": result.get("violations", ""),
+                        }
+                    )
                     logger.warning("a9_mismatch_false_negative", instance=instance.id)
 
             except Exception as e:
@@ -67,23 +73,22 @@ async def a9_judge(state: ModelPack) -> ModelPack:
                 source_agent="A9",
                 target_agent="A7",
                 issue="checker_false_negative",
-                evidence={
-                    "mismatches": mismatches,
-                    "total_checked": len(solved_instances)
-                },
-                proposed_fix="Checker is too strict or has logic errors. Review constraint implementation."
+                evidence={"mismatches": mismatches, "total_checked": len(solved_instances)},
+                proposed_fix="Checker is too strict or has logic errors. Review constraint implementation.",
             )
             state.tests["last_feedback"] = feedback
         else:
             state.tests["last_feedback"] = None
             state.status = "completed"
 
-        state.tests["logs"].append({
-            "agent": "A9",
-            "status": "success",
-            "validated": len(solved_instances),
-            "mismatches": len(mismatches)
-        })
+        state.tests["logs"].append(
+            {
+                "agent": "A9",
+                "status": "success",
+                "validated": len(solved_instances),
+                "mismatches": len(mismatches),
+            }
+        )
 
     except Exception as e:
         logger.error("a9_judge_error", error=str(e))
