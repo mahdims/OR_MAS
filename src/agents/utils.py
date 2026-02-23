@@ -2,7 +2,9 @@
 import tempfile
 import importlib.util
 import sys
+import os
 from typing import Any, Dict
+import pyomo.environ as pyo
 import structlog
 
 logger = structlog.get_logger(__name__)
@@ -52,3 +54,29 @@ def load_modules_with_shared_namespace(code_pack) -> Dict[str, Any]:
         exec(code_pack.solution_checker.source, namespace)
 
     return namespace
+
+
+def resolve_solver():
+    """
+    Resolve a usable solver.
+
+    Priority:
+    1) SOLVER env var if provided
+    2) scip
+    3) highs
+    """
+    explicit = os.getenv("SOLVER")
+    if explicit:
+        solver = pyo.SolverFactory(explicit)
+        if solver.available():
+            return explicit, solver
+        logger.error(f"Solver {explicit} not available")
+        return None, None
+
+    for name in ("scip", "highs"):
+        solver = pyo.SolverFactory(name)
+        if solver.available():
+            return name, solver
+
+    logger.error("No solver available (tried: scip, highs)")
+    return None, None

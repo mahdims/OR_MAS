@@ -1,11 +1,10 @@
 # modelpack/agents/agent6_screen.py
 import structlog
-import os
 import traceback
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
 from ..schemas import ModelPack, Feedback, TestInstance
-from .utils import load_modules_with_shared_namespace
+from .utils import load_modules_with_shared_namespace, resolve_solver
 
 logger = structlog.get_logger(__name__)
 
@@ -101,7 +100,11 @@ async def a6_screen(state: ModelPack) -> ModelPack:
             return state
 
         # If model builds, test feasibility
-        solver_name = os.getenv("SOLVER", "glpk")
+        solver_name, solver = resolve_solver()
+        if not solver:
+            state.tests["logs"].append({"agent": "A6", "error": "No solver available"})
+            return state
+
         infeasible_count = 0
 
         for seed in range(4):
@@ -109,11 +112,6 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                 data = DataGen(seed, extracted_data=extracted)
                 model = ModelBuilder(data)
 
-                if not pyo.SolverFactory(solver_name).available():
-                    logger.error(f"Solver {solver_name} not available")
-                    continue
-
-                solver = pyo.SolverFactory(solver_name)
                 results = solver.solve(model, tee=False, timelimit=10)
 
                 feasible = (results.solver.status == SolverStatus.ok and

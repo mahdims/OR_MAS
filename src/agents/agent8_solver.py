@@ -1,10 +1,9 @@
 # modelpack/agents/agent8_solver.py
 import structlog
-import os
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
 from ..schemas import ModelPack, TestInstance
-from .utils import load_modules_with_shared_namespace
+from .utils import load_modules_with_shared_namespace, resolve_solver
 
 logger = structlog.get_logger(__name__)
 
@@ -27,7 +26,11 @@ async def a8_solver(state: ModelPack) -> ModelPack:
         if not DataGen or not ModelBuilder:
             raise ValueError("DataGen or ModelBuilder not found")
 
-        solver_name = os.getenv("SOLVER", "glpk")
+        solver_name, solver = resolve_solver()
+        if not solver:
+            state.tests["logs"].append({"agent": "A8", "error": "No solver available"})
+            return state
+
         extracted = state.extracted_data.dict() if state.extracted_data else {}
 
         # Solve multiple instances
@@ -36,11 +39,6 @@ async def a8_solver(state: ModelPack) -> ModelPack:
                 data = DataGen(seed, extracted_data=extracted)
                 model = ModelBuilder(data)
 
-                if not pyo.SolverFactory(solver_name).available():
-                    logger.error(f"Solver {solver_name} not available")
-                    continue
-
-                solver = pyo.SolverFactory(solver_name)
                 results = solver.solve(model, tee=False, timelimit=30)
 
                 feasible = (results.solver.status == SolverStatus.ok and
