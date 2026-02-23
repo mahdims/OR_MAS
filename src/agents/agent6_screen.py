@@ -104,6 +104,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
         if not solver:
             state.tests["logs"].append({"agent": "A6", "error": "No solver available"})
             return state
+        logger.info("a6_solver_selected", solver=solver_name)
 
         infeasible_count = 0
 

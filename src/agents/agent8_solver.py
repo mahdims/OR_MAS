@@ -30,6 +30,7 @@ async def a8_solver(state: ModelPack) -> ModelPack:
         if not solver:
             state.tests["logs"].append({"agent": "A8", "error": "No solver available"})
             return state
+        logger.info("a8_solver_selected", solver=solver_name)
 
         extracted = state.extracted_data.dict() if state.extracted_data else {}
 
