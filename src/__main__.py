@@ -31,13 +31,17 @@ async def run_pipeline(problem_text: str) -> ModelPack:
     return result["model_pack"]
 
 
-async def run_generation_pipeline(problem_text: str) -> ModelPack:
+async def run_generation_pipeline(
+    problem_text: str,
+    generation_mode: str = "repair2",
+) -> ModelPack:
     """Run the generation-only pipeline (A0->A4) on a natural language problem."""
     logger.info("starting_generation_pipeline", problem_length=len(problem_text))
 
     model_pack = ModelPack()
     model_pack.context["nl_problem"] = problem_text
     model_pack.context["target_interface"] = "create_model"
+    model_pack.context["generation_mode"] = (generation_mode or "repair2").strip() or "repair2"
 
     app = create_generation_app()
     initial_state = {"model_pack": model_pack}

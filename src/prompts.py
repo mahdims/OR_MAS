@@ -153,14 +153,21 @@ def ModelBuilder(data: Any) -> pyo.ConcreteModel:
 
 Return Python code that follows ALL rules exactly:
 1. Emit exactly one top-level function: create_model(...)
-2. create_model must return pyo.ConcreteModel
-3. No file I/O
-4. No solver calls
-5. No external network or subprocess calls
-6. No randomness or time-dependent behavior
-7. Use only deterministic Pyomo model construction
-8. Keep helper logic inside create_model unless absolutely required
-9. Do not emit markdown fences or explanations
+2. create_model must have a non-empty explicit argument list
+3. Do not use *args or **kwargs in create_model
+4. create_model must return pyo.ConcreteModel
+5. Arguments represent input sets/parameters only
+6. Decision variables must be defined as pyo.Var components
+7. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList
+8. No file I/O
+9. No solver calls
+10. No external network or subprocess calls
+11. No randomness or time-dependent behavior
+12. Use only deterministic Pyomo model construction
+13. Do not derive sets from model component values (example: range(model.N.value))
+14. Use every create_model argument in model construction
+15. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
+16. Do not emit markdown fences or explanations
 
 The output is executed directly as a Python module and must be syntactically valid."""
     },
