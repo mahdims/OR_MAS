@@ -174,7 +174,38 @@ def create_graph() -> StateGraph:
     return graph
 
 
+def create_generation_graph() -> StateGraph:
+    """Create generation-only graph (A0->A4) without validation loop agents."""
+
+    graph = StateGraph(GraphState)
+
+    graph.add_node("A0_specifier", run_a0)
+    graph.add_node("A1_extractor", run_a1)
+    graph.add_node("A2_reviser", run_a2)
+    graph.add_node("A3_mathifier", run_a3)
+    graph.add_node("A3B_data_extractor", run_a3b)
+    graph.add_node("A3C_schema", run_a3c)
+    graph.add_node("A4_pyomo", run_a4)
+
+    graph.add_edge("A0_specifier", "A1_extractor")
+    graph.add_edge("A1_extractor", "A2_reviser")
+    graph.add_edge("A2_reviser", "A3_mathifier")
+    graph.add_edge("A3_mathifier", "A3B_data_extractor")
+    graph.add_edge("A3B_data_extractor", "A3C_schema")
+    graph.add_edge("A3C_schema", "A4_pyomo")
+    graph.add_edge("A4_pyomo", END)
+
+    graph.set_entry_point("A0_specifier")
+    return graph
+
+
 def create_app():
     """Create compiled app without checkpointing."""
     graph = create_graph()
+    return graph.compile()
+
+
+def create_generation_app():
+    """Create compiled generation-only app without checkpointing."""
+    graph = create_generation_graph()
     return graph.compile()

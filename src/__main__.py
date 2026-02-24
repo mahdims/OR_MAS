@@ -6,7 +6,7 @@ import structlog
 from dotenv import load_dotenv
 
 from .schemas import ModelPack
-from .orchestration.graph import create_app
+from .orchestration.graph import create_app, create_generation_app
 
 load_dotenv()
 logger = structlog.get_logger(__name__)
@@ -28,6 +28,23 @@ async def run_pipeline(problem_text: str) -> ModelPack:
     result = await app.ainvoke(initial_state)
 
     logger.info("pipeline_complete", status=result["model_pack"].status)
+    return result["model_pack"]
+
+
+async def run_generation_pipeline(problem_text: str) -> ModelPack:
+    """Run the generation-only pipeline (A0->A4) on a natural language problem."""
+    logger.info("starting_generation_pipeline", problem_length=len(problem_text))
+
+    model_pack = ModelPack()
+    model_pack.context["nl_problem"] = problem_text
+    model_pack.context["target_interface"] = "create_model"
+
+    app = create_generation_app()
+    initial_state = {"model_pack": model_pack}
+
+    result = await app.ainvoke(initial_state)
+
+    logger.info("generation_pipeline_complete", status=result["model_pack"].status)
     return result["model_pack"]
 
 

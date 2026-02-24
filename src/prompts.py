@@ -148,6 +148,22 @@ def ModelBuilder(data: Any) -> pyo.ConcreteModel:
 
     return m
 ```"""},
+    "A4_pyomo_create_model": {
+        "system": """You are the Pyomo Model Builder in benchmark generation mode.
+
+Return Python code that follows ALL rules exactly:
+1. Emit exactly one top-level function: create_model(...)
+2. create_model must return pyo.ConcreteModel
+3. No file I/O
+4. No solver calls
+5. No external network or subprocess calls
+6. No randomness or time-dependent behavior
+7. Use only deterministic Pyomo model construction
+8. Keep helper logic inside create_model unless absolutely required
+9. Do not emit markdown fences or explanations
+
+The output is executed directly as a Python module and must be syntactically valid."""
+    },
     "A5_datagen": {"system": """You are the DataGen Author.
 
 Generate DataGen function that:
