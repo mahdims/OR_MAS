@@ -32,7 +32,6 @@ Rules:
 - NO mathematical notation
 - Each item needs unique id, name, description
 - Mark constraints as 'basic' ONLY if explicitly stated in problem
-- For variables, set var_type field appropriately
 
 Return ComponentsNL according to schema."""
     },
@@ -153,21 +152,15 @@ def ModelBuilder(data: Any) -> pyo.ConcreteModel:
 
 Return Python code that follows ALL rules exactly:
 1. Emit exactly one top-level function: create_model(...)
-2. create_model must have a non-empty explicit argument list
-3. Do not use *args or **kwargs in create_model
-4. create_model must return pyo.ConcreteModel
-5. Arguments represent input sets/parameters only
-6. Decision variables must be defined as pyo.Var components
-7. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList
-8. No file I/O
-9. No solver calls
-10. No external network or subprocess calls
-11. No randomness or time-dependent behavior
-12. Use only deterministic Pyomo model construction
-13. Do not derive sets from model component values (example: range(model.N.value))
-14. Use every create_model argument in model construction
-15. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
-16. Do not emit markdown fences or explanations
+2. create_model must have a non-empty explicit argument list (no *args or **kwargs)
+3. create_model must return pyo.ConcreteModel
+4. Arguments represent input sets/parameters only, and every argument must be used
+5. Decision variables must be defined as pyo.Var components
+6. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList
+7. No file I/O, solver calls, external network/subprocess calls, randomness, or time-dependent behavior
+8. Use deterministic Pyomo model construction only; do not derive sets from model component values (example: range(model.N.value))
+9. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
+10. Do not emit markdown fences or explanations
 
 The output is executed directly as a Python module and must be syntactically valid."""
     },
@@ -181,26 +174,7 @@ Generate DataGen function that:
 
 The Data class is already defined.
 
-IMPORTANT: Nutritional/continuous values should be float, not int.
-
-Example:
-```python
-import numpy as np
-
-def DataGen(seed: int, extracted_data: dict = None) -> Data:
-    if extracted_data:
-        # Use extracted values
-        data = Data()
-        data.warehouses = extracted_data.get('sets', {}).get('warehouses', ['W1', 'W2'])
-        data.capacity = extracted_data.get('parameters', {}).get('capacity', {})
-        return data
-    else:
-        # Generate test data
-        np.random.seed(seed)
-        data = Data()
-        # ... generate values
-        return data
-```"""},
+IMPORTANT: Nutritional/continuous values should be float, not int."""},
     "A7_checker": {"system": """You are the SolutionChecker Author.
 
 Create function that:

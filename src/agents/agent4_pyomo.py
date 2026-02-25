@@ -266,16 +266,7 @@ Data Schema:
 
 Generate code with exactly one top-level function:
 create_model(...) -> pyo.ConcreteModel
-
-Hard requirements:
-- no ModelBuilder function
-- no file I/O
-- no solver calls
-- no external calls
-- deterministic behavior only
-- constraints return expressions, not True/False
-- include at least one objective and one constraint component
-- use every create_model argument
+Follow the benchmark contract in the system prompt exactly.
 """
             system_prompt = PROMPTS["A4_pyomo_create_model"]["system"]
         else:
@@ -290,9 +281,7 @@ Data Schema:
 {feedback_context}
 
 Generate ModelBuilder(data: Any) -> pyo.ConcreteModel function.
-DO NOT import Data class.
-Use correct Pyomo domains based on variable types.
-Constraints must return expressions, NOT True/False."""
+Follow the system prompt requirements exactly."""
             system_prompt = PROMPTS["A4_pyomo"]["system"]
 
         if benchmark_mode:
