@@ -26,21 +26,27 @@ class LLMClient:
         api_key: str = None,
         base_url: str = None,
     ):
-        self.provider = provider or os.getenv("PROVIDER", "openai")
-        self.model_name = model_name or os.getenv("MODEL_NAME", "gpt-4o-mini")
-        self.api_key = api_key or os.getenv("API_KEY")
+        self.model_name = model_name or os.getenv("MODEL_NAME") or os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
+        resolved_provider = provider or os.getenv("PROVIDER")
+        if not resolved_provider:
+            resolved_provider = "gemini" if "gemini" in self.model_name.lower() else "openai"
+        self.provider = resolved_provider.lower().replace("gemeni", "gemini")
         self.base_url = base_url or os.getenv("BASE_URL")
 
         # Initialize client based on provider
         if self.provider == "gemini":
+            self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
             genai.configure(api_key=self.api_key)
             base_client = genai.GenerativeModel(self.model_name or "gemini-1.5-pro")
+            self.raw_client = base_client
             self.client = instructor.from_gemini(
                 client=base_client, mode=instructor.Mode.GEMINI_JSON
             )
         else:
+            self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
             # OpenAI-compatible (OpenAI, DeepSeek, Qwen, local)
             base_client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            self.raw_client = base_client
             self.client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=60))
@@ -82,15 +88,13 @@ class LLMClient:
         """Generate code with optional validation."""
         try:
             if self.provider == "gemini":
-                model = genai.GenerativeModel(self.model_name or "gemini-1.5-pro")
-                response = model.generate_content(
+                response = self.raw_client.generate_content(
                     f"{sys_prompt}\n\n{user_prompt}",
                     generation_config=genai.GenerationConfig(temperature=temperature),
                 )
                 code = response.text
             else:
-                client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-                response = client.chat.completions.create(
+                response = self.raw_client.chat.completions.create(
                     model=self.model_name,
                     messages=[
                         {"role": "system", "content": sys_prompt},
