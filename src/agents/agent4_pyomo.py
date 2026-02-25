@@ -328,8 +328,7 @@ Return corrected code only."""
                 if not repaired_valid:
                     joined = ", ".join(repaired_diagnostics)
                     raise ValueError(
-                        "benchmark_create_model_validation_failed_after_repair: "
-                        f"{joined}"
+                        "benchmark_create_model_validation_failed_after_repair: " f"{joined}"
                     )
                 code = repaired_code
             elif not valid:
