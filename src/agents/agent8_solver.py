@@ -23,9 +23,12 @@ async def a8_solver(state: ModelPack) -> ModelPack:
 
         DataGen = namespace.get("DataGen")
         ModelBuilder = namespace.get("ModelBuilder")
+        create_model_fn = namespace.get("create_model")
 
-        if not DataGen or not ModelBuilder:
-            raise ValueError("DataGen or ModelBuilder not found")
+        if not DataGen:
+            raise ValueError("DataGen not found")
+        if not ModelBuilder and not create_model_fn:
+            raise ValueError("ModelBuilder or create_model not found")
 
         solver_name, solver = resolve_solver()
         if not solver:
@@ -39,7 +42,16 @@ async def a8_solver(state: ModelPack) -> ModelPack:
         for seed in range(3):
             try:
                 data = DataGen(seed, extracted_data=extracted)
-                model = ModelBuilder(data)
+                if ModelBuilder:
+                    model = ModelBuilder(data)
+                else:
+                    if isinstance(data, dict):
+                        data_kwargs = dict(data)
+                    elif hasattr(data, "__dict__"):
+                        data_kwargs = vars(data)
+                    else:
+                        raise TypeError("DataGen output must be dict-like for create_model mode")
+                    model = create_model_fn(**data_kwargs)
 
                 results = solver.solve(model, tee=False, timelimit=30)
 
@@ -63,7 +75,12 @@ async def a8_solver(state: ModelPack) -> ModelPack:
                     obj_value = pyo.value(model.objective)
 
                 # Store instance
-                data_dict = vars(data) if hasattr(data, "__dict__") else {}
+                if isinstance(data, dict):
+                    data_dict = dict(data)
+                elif hasattr(data, "__dict__"):
+                    data_dict = vars(data)
+                else:
+                    data_dict = {}
                 instance = TestInstance(
                     id=f"solve_{seed}",
                     data_dict=data_dict,

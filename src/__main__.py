@@ -12,13 +12,23 @@ load_dotenv()
 logger = structlog.get_logger(__name__)
 
 
-async def run_pipeline(problem_text: str) -> ModelPack:
+async def run_pipeline(
+    problem_text: str,
+    target_interface: str = "",
+    generation_mode: str = "repair2",
+) -> ModelPack:
     """Run the full modeling pipeline on a natural language problem."""
     logger.info("starting_pipeline", problem_length=len(problem_text))
 
     # Initialize state
     model_pack = ModelPack()
     model_pack.context["nl_problem"] = problem_text
+    target_interface = (target_interface or "").strip()
+    if target_interface:
+        model_pack.context["target_interface"] = target_interface
+        model_pack.context["generation_mode"] = (
+            (generation_mode or "repair2").strip() or "repair2"
+        )
 
     # Create and run app
     app = create_app()

@@ -29,9 +29,12 @@ async def a6_screen(state: ModelPack) -> ModelPack:
 
         DataGen = namespace.get("DataGen")
         ModelBuilder = namespace.get("ModelBuilder")
+        create_model_fn = namespace.get("create_model")
 
-        if not DataGen or not ModelBuilder:
-            raise ValueError("DataGen or ModelBuilder not found in namespace")
+        if not DataGen:
+            raise ValueError("DataGen not found in namespace")
+        if not ModelBuilder and not create_model_fn:
+            raise ValueError("ModelBuilder or create_model not found in namespace")
 
         # Try to build with test instance to catch errors early
         extracted = state.extracted_data.dict() if state.extracted_data else {}
@@ -39,7 +42,16 @@ async def a6_screen(state: ModelPack) -> ModelPack:
 
         try:
             # This is where Pyomo errors occur
-            test_model = ModelBuilder(test_data)
+            if ModelBuilder:
+                test_model = ModelBuilder(test_data)
+            else:
+                if isinstance(test_data, dict):
+                    test_kwargs = dict(test_data)
+                elif hasattr(test_data, "__dict__"):
+                    test_kwargs = vars(test_data)
+                else:
+                    raise TypeError("DataGen output must be dict-like for create_model mode")
+                test_model = create_model_fn(**test_kwargs)
             logger.info("a6_model_builds_successfully")
 
         except Exception as pyomo_error:
@@ -114,7 +126,16 @@ async def a6_screen(state: ModelPack) -> ModelPack:
         for seed in range(4):
             try:
                 data = DataGen(seed, extracted_data=extracted)
-                model = ModelBuilder(data)
+                if ModelBuilder:
+                    model = ModelBuilder(data)
+                else:
+                    if isinstance(data, dict):
+                        data_kwargs = dict(data)
+                    elif hasattr(data, "__dict__"):
+                        data_kwargs = vars(data)
+                    else:
+                        raise TypeError("DataGen output must be dict-like for create_model mode")
+                    model = create_model_fn(**data_kwargs)
 
                 results = solver.solve(model, tee=False, timelimit=10)
 
@@ -125,7 +146,12 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                 )
 
                 # Store instance
-                data_dict = vars(data) if hasattr(data, "__dict__") else {}
+                if isinstance(data, dict):
+                    data_dict = dict(data)
+                elif hasattr(data, "__dict__"):
+                    data_dict = vars(data)
+                else:
+                    data_dict = {}
                 instance = TestInstance(
                     id=f"screen_{seed}",
                     data_dict=data_dict,
