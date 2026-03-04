@@ -26,7 +26,9 @@ class LLMClient:
         api_key: str = None,
         base_url: str = None,
     ):
-        self.model_name = model_name or os.getenv("MODEL_NAME") or os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
+        self.model_name = (
+            model_name or os.getenv("MODEL_NAME") or os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
+        )
         resolved_provider = provider or os.getenv("PROVIDER")
         if not resolved_provider:
             resolved_provider = "gemini" if "gemini" in self.model_name.lower() else "openai"
