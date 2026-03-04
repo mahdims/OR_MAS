@@ -51,7 +51,7 @@ class LLMClient:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=60))
     def structured_call(
-        self, sys_prompt: str, user_prompt: str, pyd_model: Type[T], temperature: float = 0.7
+        self, sys_prompt: str, user_prompt: str, pyd_model: Type[T], temperature: float = 0.0
     ) -> T:
         """Generate structured output using any LLM provider."""
         try:
@@ -83,7 +83,7 @@ class LLMClient:
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=60))
     def code_generation_call(
-        self, sys_prompt: str, user_prompt: str, temperature: float = 0.3, validate: bool = True
+        self, sys_prompt: str, user_prompt: str, temperature: float = 0.0, validate: bool = True
     ) -> str:
         """Generate code with optional validation."""
         try:
