@@ -76,6 +76,8 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                 feedback_issue = "type_mismatch"
                 fix = "Data type mismatch. Use float for continuous values, not int."
                 # Route to A5 for data type issues
+                repair_iterations = state.tests.setdefault("repair_iterations", {})
+                repair_iterations["A6_to_A5"] = int(repair_iterations.get("A6_to_A5") or 0) + 1
                 state.tests["last_feedback"] = Feedback(
                     source_agent="A6",
                     target_agent="A5",
@@ -105,6 +107,8 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                 retry_count=retry_count,
             )
 
+            repair_iterations = state.tests.setdefault("repair_iterations", {})
+            repair_iterations["A6_to_A4"] = int(repair_iterations.get("A6_to_A4") or 0) + 1
             state.tests["last_feedback"] = feedback
             state.tests["retry_counts"][retry_key] = retry_count + 1
 
@@ -178,6 +182,8 @@ async def a6_screen(state: ModelPack) -> ModelPack:
 
         # Check for data issues
         if infeasible_count > 2:
+            repair_iterations = state.tests.setdefault("repair_iterations", {})
+            repair_iterations["A6_to_A5"] = int(repair_iterations.get("A6_to_A5") or 0) + 1
             feedback = Feedback(
                 source_agent="A6",
                 target_agent="A5",

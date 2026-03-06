@@ -78,6 +78,8 @@ async def a9_judge(state: ModelPack) -> ModelPack:
                 state.tests["last_feedback"] = None
                 state.status = "completed"
                 return state
+            repair_iterations = state.tests.setdefault("repair_iterations", {})
+            repair_iterations["A9_to_A7"] = int(repair_iterations.get("A9_to_A7") or 0) + 1
             feedback = Feedback(
                 source_agent="A9",
                 target_agent="A7",

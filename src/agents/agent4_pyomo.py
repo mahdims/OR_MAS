@@ -293,6 +293,10 @@ Follow the system prompt requirements exactly."""
             )
             valid, diagnostics = _validate_create_model_entrypoint(code)
             if not valid and generation_mode == "repair2":
+                repair_iterations = state.tests.setdefault("repair_iterations", {})
+                repair_iterations["A4_validation"] = (
+                    int(repair_iterations.get("A4_validation") or 0) + 1
+                )
                 diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
                 repair_prompt = f"""{user_prompt}
 

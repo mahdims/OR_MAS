@@ -140,6 +140,7 @@ class ModelPack(BaseModel):
             "llm_usage_summary": {},
             "last_feedback": None,
             "retry_counts": {},  # Track retries per agent
+            "repair_iterations": {},  # Preserve total repair counts by feedback source.
         }
     )
     status: str = "initialized"
