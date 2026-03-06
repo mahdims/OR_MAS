@@ -1,19 +1,28 @@
 # modelpack/llm.py
-import os
 import ast
-import instructor
-from openai import OpenAI
+import inspect
+import os
+import time
+from contextvars import ContextVar, Token
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Type, TypeVar
+
 import google.generativeai as genai
-from pydantic import BaseModel
-from typing import Type, TypeVar, Optional
+import instructor
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential
 from dotenv import load_dotenv
+from openai import OpenAI
+from pydantic import BaseModel
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 load_dotenv()
 logger = structlog.get_logger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+_ACTIVE_LLM_TRACE: ContextVar[Optional[List[Dict[str, Any]]]] = ContextVar(
+    "ACTIVE_LLM_TRACE",
+    default=None,
+)
 
 
 class LLMClient:
@@ -51,11 +60,203 @@ class LLMClient:
             self.raw_client = base_client
             self.client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
 
+    def begin_trace(self) -> Token:
+        return _ACTIVE_LLM_TRACE.set([])
+
+    def end_trace(self, token: Token) -> Dict[str, Any]:
+        calls = list(_ACTIVE_LLM_TRACE.get() or [])
+        _ACTIVE_LLM_TRACE.reset(token)
+        return {"calls": calls, "summary": self._summarize_calls(calls)}
+
+    def _detect_caller(self) -> str:
+        frame = inspect.currentframe()
+        fallback = "unknown"
+        try:
+            current = frame.f_back if frame is not None else None
+            while current is not None:
+                module_name = str(current.f_globals.get("__name__") or "")
+                function_name = current.f_code.co_name
+                label = f"{module_name}.{function_name}" if module_name else function_name
+                if ".agents." in module_name:
+                    return label
+                if module_name != __name__ and not module_name.startswith("tenacity"):
+                    fallback = label
+                current = current.f_back
+        finally:
+            del frame
+        return fallback
+
+    def _usage_to_dict(self, usage_obj: Any) -> Optional[Dict[str, Any]]:
+        if usage_obj is None:
+            return None
+        if isinstance(usage_obj, dict):
+            return dict(usage_obj)
+
+        model_dump = getattr(usage_obj, "model_dump", None)
+        if callable(model_dump):
+            try:
+                payload = model_dump(exclude_none=True)
+            except TypeError:
+                payload = model_dump()
+            if isinstance(payload, dict):
+                return payload
+
+        to_dict = getattr(usage_obj, "dict", None)
+        if callable(to_dict):
+            payload = to_dict()
+            if isinstance(payload, dict):
+                return payload
+
+        if hasattr(usage_obj, "__dict__"):
+            payload = {
+                key: value
+                for key, value in vars(usage_obj).items()
+                if not key.startswith("_")
+            }
+            if payload:
+                return payload
+        return None
+
+    def _extract_usage_payload(self, raw_response: Any) -> Optional[Dict[str, Any]]:
+        if raw_response is None:
+            return None
+        if isinstance(raw_response, dict):
+            usage_obj = raw_response.get("usage") or raw_response.get("usage_metadata")
+            return self._usage_to_dict(usage_obj)
+
+        usage_obj = getattr(raw_response, "usage", None)
+        if usage_obj is None:
+            usage_obj = getattr(raw_response, "usage_metadata", None)
+        return self._usage_to_dict(usage_obj)
+
+    @staticmethod
+    def _safe_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _normalize_usage(self, usage_payload: Optional[Dict[str, Any]]) -> Dict[str, Optional[int]]:
+        usage_payload = usage_payload or {}
+        input_tokens = self._safe_int(
+            usage_payload.get("prompt_tokens")
+            or usage_payload.get("input_tokens")
+            or usage_payload.get("prompt_token_count")
+        )
+        output_tokens = self._safe_int(
+            usage_payload.get("completion_tokens")
+            or usage_payload.get("output_tokens")
+            or usage_payload.get("candidates_token_count")
+        )
+        total_tokens = self._safe_int(
+            usage_payload.get("total_tokens") or usage_payload.get("total_token_count")
+        )
+        if total_tokens is None and input_tokens is not None and output_tokens is not None:
+            total_tokens = input_tokens + output_tokens
+        return {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    def _record_call(
+        self,
+        *,
+        call_type: str,
+        raw_response: Any,
+        started_at: datetime,
+        latency_seconds: float,
+        success: bool,
+        error: Optional[str],
+        temperature: float,
+        response_model: Optional[str] = None,
+    ) -> None:
+        trace = _ACTIVE_LLM_TRACE.get()
+        if trace is None:
+            return
+
+        usage_payload = self._extract_usage_payload(raw_response)
+        normalized_usage = self._normalize_usage(usage_payload)
+        trace.append(
+            {
+                "sequence": len(trace) + 1,
+                "call_type": call_type,
+                "caller": self._detect_caller(),
+                "provider": self.provider,
+                "model_name": self.model_name,
+                "response_model": response_model,
+                "temperature": float(temperature),
+                "started_at": started_at.astimezone(timezone.utc).isoformat(),
+                "latency_seconds": round(latency_seconds, 6),
+                "success": success,
+                "error": error,
+                "input_tokens": normalized_usage["input_tokens"],
+                "output_tokens": normalized_usage["output_tokens"],
+                "total_tokens": normalized_usage["total_tokens"],
+                "usage": usage_payload,
+            }
+        )
+
+    def _summarize_calls(self, calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {
+            "call_count": len(calls),
+            "successful_calls": 0,
+            "failed_calls": 0,
+            "calls_with_usage": 0,
+            "calls_without_usage": 0,
+            "structured_calls": 0,
+            "code_generation_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "total_latency_seconds": 0.0,
+            "avg_latency_seconds": None,
+        }
+        for call in calls:
+            if call.get("success"):
+                summary["successful_calls"] += 1
+            else:
+                summary["failed_calls"] += 1
+
+            if call.get("call_type") == "structured":
+                summary["structured_calls"] += 1
+            elif call.get("call_type") == "code_generation":
+                summary["code_generation_calls"] += 1
+
+            latency_seconds = call.get("latency_seconds")
+            if isinstance(latency_seconds, (int, float)):
+                summary["total_latency_seconds"] += float(latency_seconds)
+
+            total_tokens = self._safe_int(call.get("total_tokens"))
+            input_tokens = self._safe_int(call.get("input_tokens"))
+            output_tokens = self._safe_int(call.get("output_tokens"))
+            if total_tokens is not None or input_tokens is not None or output_tokens is not None:
+                summary["calls_with_usage"] += 1
+            else:
+                summary["calls_without_usage"] += 1
+
+            summary["input_tokens"] += input_tokens or 0
+            summary["output_tokens"] += output_tokens or 0
+            summary["total_tokens"] += total_tokens or 0
+
+        if calls:
+            summary["total_latency_seconds"] = round(summary["total_latency_seconds"], 6)
+            summary["avg_latency_seconds"] = round(
+                summary["total_latency_seconds"] / len(calls),
+                6,
+            )
+        return summary
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=60))
     def structured_call(
         self, sys_prompt: str, user_prompt: str, pyd_model: Type[T], temperature: float = 0.0
     ) -> T:
         """Generate structured output using any LLM provider."""
+        started_at = datetime.now(timezone.utc)
+        started_perf = time.perf_counter()
+        result: Optional[T] = None
         try:
             if self.provider == "gemini":
                 result = self.client.chat.completions.create(
@@ -76,10 +277,30 @@ class LLMClient:
                     temperature=temperature,
                 )
 
+            self._record_call(
+                call_type="structured",
+                raw_response=getattr(result, "_raw_response", None),
+                started_at=started_at,
+                latency_seconds=time.perf_counter() - started_perf,
+                success=True,
+                error=None,
+                temperature=temperature,
+                response_model=getattr(pyd_model, "__name__", str(pyd_model)),
+            )
             logger.info("structured_call_success", provider=self.provider)
             return result
 
         except Exception as e:
+            self._record_call(
+                call_type="structured",
+                raw_response=getattr(result, "_raw_response", None) if result is not None else None,
+                started_at=started_at,
+                latency_seconds=time.perf_counter() - started_perf,
+                success=False,
+                error=str(e),
+                temperature=temperature,
+                response_model=getattr(pyd_model, "__name__", str(pyd_model)),
+            )
             logger.error("structured_call_error", provider=self.provider, error=str(e))
             raise
 
@@ -88,6 +309,9 @@ class LLMClient:
         self, sys_prompt: str, user_prompt: str, temperature: float = 0.0, validate: bool = True
     ) -> str:
         """Generate code with optional validation."""
+        started_at = datetime.now(timezone.utc)
+        started_perf = time.perf_counter()
+        response: Any = None
         try:
             if self.provider == "gemini":
                 response = self.raw_client.generate_content(
@@ -125,9 +349,27 @@ class LLMClient:
                     code = self._fix_common_syntax_errors(code)
                     ast.parse(code)  # Re-validate
 
+            self._record_call(
+                call_type="code_generation",
+                raw_response=response,
+                started_at=started_at,
+                latency_seconds=time.perf_counter() - started_perf,
+                success=True,
+                error=None,
+                temperature=temperature,
+            )
             return code
 
         except Exception as e:
+            self._record_call(
+                call_type="code_generation",
+                raw_response=response,
+                started_at=started_at,
+                latency_seconds=time.perf_counter() - started_perf,
+                success=False,
+                error=str(e),
+                temperature=temperature,
+            )
             logger.error("code_generation_error", error=str(e))
             raise
 

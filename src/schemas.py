@@ -136,6 +136,8 @@ class ModelPack(BaseModel):
         default_factory=lambda: {
             "instances": [],
             "logs": [],
+            "llm_calls": [],
+            "llm_usage_summary": {},
             "last_feedback": None,
             "retry_counts": {},  # Track retries per agent
         }

@@ -5,11 +5,17 @@ import argparse
 import structlog
 from dotenv import load_dotenv
 
+from .llm import llm_client
 from .schemas import ModelPack
 from .orchestration.graph import create_app, create_generation_app
 
 load_dotenv()
 logger = structlog.get_logger(__name__)
+
+
+def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -> None:
+    model_pack.tests["llm_calls"] = trace_payload.get("calls", [])
+    model_pack.tests["llm_usage_summary"] = trace_payload.get("summary", {})
 
 
 async def run_pipeline(
@@ -36,7 +42,14 @@ async def run_pipeline(
     initial_state = {"model_pack": model_pack}
 
     # Execute pipeline
-    result = await app.ainvoke(initial_state)
+    trace_token = llm_client.begin_trace()
+    result = None
+    try:
+        result = await app.ainvoke(initial_state)
+    finally:
+        trace_payload = llm_client.end_trace(trace_token)
+        target_model_pack = result["model_pack"] if result is not None else model_pack
+        _attach_llm_trace(target_model_pack, trace_payload)
 
     logger.info("pipeline_complete", status=result["model_pack"].status)
     return result["model_pack"]
@@ -57,7 +70,14 @@ async def run_generation_pipeline(
     app = create_generation_app()
     initial_state = {"model_pack": model_pack}
 
-    result = await app.ainvoke(initial_state)
+    trace_token = llm_client.begin_trace()
+    result = None
+    try:
+        result = await app.ainvoke(initial_state)
+    finally:
+        trace_payload = llm_client.end_trace(trace_token)
+        target_model_pack = result["model_pack"] if result is not None else model_pack
+        _attach_llm_trace(target_model_pack, trace_payload)
 
     logger.info("generation_pipeline_complete", status=result["model_pack"].status)
     return result["model_pack"]
