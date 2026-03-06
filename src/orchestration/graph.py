@@ -21,7 +21,18 @@ from ..agents import (
 
 logger = structlog.get_logger(__name__)
 
-FULL_GRAPH_VARIANTS = {"full", "no_a2", "no_a9", "merge_a1_a2"}
+# Best current full-graph baseline from local ablations.
+MAIN_FULL_GRAPH_VARIANT = "no_a2"
+GRAPH_VARIANT_ALIASES = {"main": MAIN_FULL_GRAPH_VARIANT}
+FULL_GRAPH_VARIANTS = {
+    "full",
+    "no_a2",
+    "no_a9",
+    "merge_a1_a2",
+    "no_a2_no_a3b",
+    "no_a2_no_a9",
+    "no_a2_no_a7_a9",
+}
 
 
 class GraphState(TypedDict):
@@ -126,53 +137,70 @@ def route_after_a9(state: GraphState) -> str:
     return "END"
 
 
-def create_graph(graph_variant: str = "full") -> StateGraph:
+def _normalize_graph_variant(graph_variant: str) -> str:
+    normalized = (graph_variant or MAIN_FULL_GRAPH_VARIANT).strip().lower()
+    normalized = GRAPH_VARIANT_ALIASES.get(normalized, normalized)
+    if normalized not in FULL_GRAPH_VARIANTS:
+        raise ValueError(f"Unsupported full graph variant: {graph_variant}")
+    return normalized
+
+
+def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
     """Create orchestration graph with feedback loops."""
 
-    graph_variant = (graph_variant or "full").strip().lower()
-    if graph_variant not in FULL_GRAPH_VARIANTS:
-        raise ValueError(f"Unsupported full graph variant: {graph_variant}")
+    graph_variant = _normalize_graph_variant(graph_variant)
+    merge_a1_a2 = graph_variant == "merge_a1_a2"
+    skip_a2 = graph_variant in {"no_a2", "no_a2_no_a3b", "no_a2_no_a9", "no_a2_no_a7_a9"}
+    skip_a3b = graph_variant == "no_a2_no_a3b"
+    skip_a7 = graph_variant == "no_a2_no_a7_a9"
+    skip_a9 = graph_variant in {"no_a9", "no_a2_no_a9", "no_a2_no_a7_a9"}
 
     graph = StateGraph(GraphState)
 
     # Add nodes
     graph.add_node("A0_specifier", run_a0)
-    if graph_variant == "merge_a1_a2":
+    if merge_a1_a2:
         graph.add_node("A1A2_extract_revise", run_a1_a2_merged)
     else:
         graph.add_node("A1_extractor", run_a1)
-        if graph_variant != "no_a2":
+        if not skip_a2:
             graph.add_node("A2_reviser", run_a2)
     graph.add_node("A3_mathifier", run_a3)
-    graph.add_node("A3B_data_extractor", run_a3b)
+    if not skip_a3b:
+        graph.add_node("A3B_data_extractor", run_a3b)
     graph.add_node("A3C_schema", run_a3c)
     graph.add_node("A4_pyomo", run_a4)
     graph.add_node("A5_datagen", run_a5)
     graph.add_node("A6_screen", run_a6)
-    graph.add_node("A7_checker", run_a7)
+    if not skip_a7:
+        graph.add_node("A7_checker", run_a7)
     graph.add_node("A8_solver", run_a8)
-    if graph_variant != "no_a9":
+    if not skip_a9:
         graph.add_node("A9_judge", run_a9)
 
     # Add edges (happy path)
-    if graph_variant == "merge_a1_a2":
+    if merge_a1_a2:
         graph.add_edge("A0_specifier", "A1A2_extract_revise")
         graph.add_edge("A1A2_extract_revise", "A3_mathifier")
     else:
         graph.add_edge("A0_specifier", "A1_extractor")
-        if graph_variant == "no_a2":
+        if skip_a2:
             graph.add_edge("A1_extractor", "A3_mathifier")
         else:
             graph.add_edge("A1_extractor", "A2_reviser")
             graph.add_edge("A2_reviser", "A3_mathifier")
-    graph.add_edge("A3_mathifier", "A3B_data_extractor")
-    graph.add_edge("A3B_data_extractor", "A3C_schema")
+    if skip_a3b:
+        graph.add_edge("A3_mathifier", "A3C_schema")
+    else:
+        graph.add_edge("A3_mathifier", "A3B_data_extractor")
+        graph.add_edge("A3B_data_extractor", "A3C_schema")
     graph.add_edge("A3C_schema", "A4_pyomo")
     graph.add_edge("A4_pyomo", "A5_datagen")
     graph.add_edge("A5_datagen", "A6_screen")
     # Conditional after A6
-    graph.add_edge("A7_checker", "A8_solver")
-    if graph_variant == "no_a9":
+    if not skip_a7:
+        graph.add_edge("A7_checker", "A8_solver")
+    if skip_a9:
         graph.add_edge("A8_solver", END)
     else:
         graph.add_edge("A8_solver", "A9_judge")
@@ -181,10 +209,14 @@ def create_graph(graph_variant: str = "full") -> StateGraph:
     graph.add_conditional_edges(
         "A6_screen",
         route_after_a6,
-        {"A4_pyomo": "A4_pyomo", "A5_datagen": "A5_datagen", "A7_checker": "A7_checker"},
+        {
+            "A4_pyomo": "A4_pyomo",
+            "A5_datagen": "A5_datagen",
+            "A7_checker": "A8_solver" if skip_a7 else "A7_checker",
+        },
     )
 
-    if graph_variant != "no_a9":
+    if not skip_a9:
         graph.add_conditional_edges(
             "A9_judge",
             route_after_a9,
@@ -227,7 +259,7 @@ def create_generation_graph() -> StateGraph:
     return graph
 
 
-def create_app(graph_variant: str = "full"):
+def create_app(graph_variant: str = MAIN_FULL_GRAPH_VARIANT):
     """Create compiled app without checkpointing."""
     graph = create_graph(graph_variant=graph_variant)
     return graph.compile()

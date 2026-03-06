@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 from .llm import llm_client
 from .schemas import ModelPack
-from .orchestration.graph import create_app, create_generation_app
+from .orchestration.graph import MAIN_FULL_GRAPH_VARIANT, create_app, create_generation_app
 
 load_dotenv()
 logger = structlog.get_logger(__name__)
@@ -22,7 +22,7 @@ async def run_pipeline(
     problem_text: str,
     target_interface: str = "",
     generation_mode: str = "repair2",
-    graph_variant: str = "full",
+    graph_variant: str = MAIN_FULL_GRAPH_VARIANT,
 ) -> ModelPack:
     """Run the full modeling pipeline on a natural language problem."""
     logger.info("starting_pipeline", problem_length=len(problem_text))
