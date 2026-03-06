@@ -22,7 +22,7 @@ from ..agents import (
 logger = structlog.get_logger(__name__)
 
 # Best current full-graph baseline from local ablations.
-MAIN_FULL_GRAPH_VARIANT = "no_a2"
+MAIN_FULL_GRAPH_VARIANT = "no_a2_merge_a0_a1"
 GRAPH_VARIANT_ALIASES = {"main": MAIN_FULL_GRAPH_VARIANT}
 FULL_GRAPH_VARIANTS = {
     "full",
