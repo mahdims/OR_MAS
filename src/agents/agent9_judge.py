@@ -11,6 +11,10 @@ async def a9_judge(state: ModelPack) -> ModelPack:
 
     logger.info("a9_judge_start", model_id=state.id)
 
+    MAX_RETRIES = 2
+    retry_key = "A9_to_A7"
+    retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
+
     if not state.code.solution_checker:
         logger.info("a9_no_checker_skip")
         state.status = "completed"
@@ -69,16 +73,24 @@ async def a9_judge(state: ModelPack) -> ModelPack:
 
         # Create feedback if mismatches found
         if mismatches:
+            if retry_count >= MAX_RETRIES:
+                logger.warning("a9_max_retries", retries=retry_count)
+                state.tests["last_feedback"] = None
+                state.status = "completed"
+                return state
             feedback = Feedback(
                 source_agent="A9",
                 target_agent="A7",
                 issue="checker_false_negative",
                 evidence={"mismatches": mismatches, "total_checked": len(solved_instances)},
                 proposed_fix="Checker is too strict or has logic errors. Review constraint implementation.",
+                retry_count=retry_count,
             )
             state.tests["last_feedback"] = feedback
+            state.tests["retry_counts"][retry_key] = retry_count + 1
         else:
             state.tests["last_feedback"] = None
+            state.tests["retry_counts"][retry_key] = 0
             state.status = "completed"
 
         state.tests["logs"].append(

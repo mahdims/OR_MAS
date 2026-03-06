@@ -16,6 +16,7 @@ async def run_pipeline(
     problem_text: str,
     target_interface: str = "",
     generation_mode: str = "repair2",
+    graph_variant: str = "full",
 ) -> ModelPack:
     """Run the full modeling pipeline on a natural language problem."""
     logger.info("starting_pipeline", problem_length=len(problem_text))
@@ -31,7 +32,7 @@ async def run_pipeline(
         )
 
     # Create and run app
-    app = create_app()
+    app = create_app(graph_variant=graph_variant)
     initial_state = {"model_pack": model_pack}
 
     # Execute pipeline

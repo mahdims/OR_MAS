@@ -21,6 +21,8 @@ from ..agents import (
 
 logger = structlog.get_logger(__name__)
 
+FULL_GRAPH_VARIANTS = {"full", "no_a2", "no_a9", "merge_a1_a2"}
+
 
 class GraphState(TypedDict):
     model_pack: ModelPack
@@ -34,6 +36,12 @@ async def run_a0(state: GraphState) -> GraphState:
 
 async def run_a1(state: GraphState) -> GraphState:
     state["model_pack"] = await agent1_extractor.a1_extractor(state["model_pack"])
+    return state
+
+
+async def run_a1_a2_merged(state: GraphState) -> GraphState:
+    state = await run_a1(state)
+    state = await run_a2(state)
     return state
 
 
@@ -118,15 +126,23 @@ def route_after_a9(state: GraphState) -> str:
     return "END"
 
 
-def create_graph() -> StateGraph:
+def create_graph(graph_variant: str = "full") -> StateGraph:
     """Create orchestration graph with feedback loops."""
+
+    graph_variant = (graph_variant or "full").strip().lower()
+    if graph_variant not in FULL_GRAPH_VARIANTS:
+        raise ValueError(f"Unsupported full graph variant: {graph_variant}")
 
     graph = StateGraph(GraphState)
 
     # Add nodes
     graph.add_node("A0_specifier", run_a0)
-    graph.add_node("A1_extractor", run_a1)
-    graph.add_node("A2_reviser", run_a2)
+    if graph_variant == "merge_a1_a2":
+        graph.add_node("A1A2_extract_revise", run_a1_a2_merged)
+    else:
+        graph.add_node("A1_extractor", run_a1)
+        if graph_variant != "no_a2":
+            graph.add_node("A2_reviser", run_a2)
     graph.add_node("A3_mathifier", run_a3)
     graph.add_node("A3B_data_extractor", run_a3b)
     graph.add_node("A3C_schema", run_a3c)
@@ -135,12 +151,20 @@ def create_graph() -> StateGraph:
     graph.add_node("A6_screen", run_a6)
     graph.add_node("A7_checker", run_a7)
     graph.add_node("A8_solver", run_a8)
-    graph.add_node("A9_judge", run_a9)
+    if graph_variant != "no_a9":
+        graph.add_node("A9_judge", run_a9)
 
     # Add edges (happy path)
-    graph.add_edge("A0_specifier", "A1_extractor")
-    graph.add_edge("A1_extractor", "A2_reviser")
-    graph.add_edge("A2_reviser", "A3_mathifier")
+    if graph_variant == "merge_a1_a2":
+        graph.add_edge("A0_specifier", "A1A2_extract_revise")
+        graph.add_edge("A1A2_extract_revise", "A3_mathifier")
+    else:
+        graph.add_edge("A0_specifier", "A1_extractor")
+        if graph_variant == "no_a2":
+            graph.add_edge("A1_extractor", "A3_mathifier")
+        else:
+            graph.add_edge("A1_extractor", "A2_reviser")
+            graph.add_edge("A2_reviser", "A3_mathifier")
     graph.add_edge("A3_mathifier", "A3B_data_extractor")
     graph.add_edge("A3B_data_extractor", "A3C_schema")
     graph.add_edge("A3C_schema", "A4_pyomo")
@@ -148,7 +172,10 @@ def create_graph() -> StateGraph:
     graph.add_edge("A5_datagen", "A6_screen")
     # Conditional after A6
     graph.add_edge("A7_checker", "A8_solver")
-    graph.add_edge("A8_solver", "A9_judge")
+    if graph_variant == "no_a9":
+        graph.add_edge("A8_solver", END)
+    else:
+        graph.add_edge("A8_solver", "A9_judge")
 
     # Add conditional edges for feedback
     graph.add_conditional_edges(
@@ -157,16 +184,17 @@ def create_graph() -> StateGraph:
         {"A4_pyomo": "A4_pyomo", "A5_datagen": "A5_datagen", "A7_checker": "A7_checker"},
     )
 
-    graph.add_conditional_edges(
-        "A9_judge",
-        route_after_a9,
-        {
-            "A7_checker": "A7_checker",
-            "A5_datagen": "A5_datagen",
-            "A4_pyomo": "A4_pyomo",
-            "END": END,
-        },
-    )
+    if graph_variant != "no_a9":
+        graph.add_conditional_edges(
+            "A9_judge",
+            route_after_a9,
+            {
+                "A7_checker": "A7_checker",
+                "A5_datagen": "A5_datagen",
+                "A4_pyomo": "A4_pyomo",
+                "END": END,
+            },
+        )
 
     # Set entry point
     graph.set_entry_point("A0_specifier")
@@ -199,9 +227,9 @@ def create_generation_graph() -> StateGraph:
     return graph
 
 
-def create_app():
+def create_app(graph_variant: str = "full"):
     """Create compiled app without checkpointing."""
-    graph = create_graph()
+    graph = create_graph(graph_variant=graph_variant)
     return graph.compile()
 
 
