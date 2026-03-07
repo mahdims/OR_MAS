@@ -22,7 +22,7 @@ from ..agents import (
 logger = structlog.get_logger(__name__)
 
 # Best current full-graph baseline from local ablations.
-MAIN_FULL_GRAPH_VARIANT = "no_a2_merge_a0_a1"
+MAIN_FULL_GRAPH_VARIANT = "no_a2_merge_a0_a1_no_a3b"
 GRAPH_VARIANT_ALIASES = {"main": MAIN_FULL_GRAPH_VARIANT}
 FULL_GRAPH_VARIANTS = {
     "full",
@@ -37,6 +37,7 @@ FULL_GRAPH_VARIANTS = {
     "no_a2_merge_a0_a1_strict",
     "no_a2_merge_a1_a3",
     "no_a2_merge_a0_a1_a3",
+    "no_a2_merge_a0_a1_no_a3b",
 }
 
 
@@ -185,7 +186,11 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
 
     graph_variant = _normalize_graph_variant(graph_variant)
     merge_a1_a2 = graph_variant == "merge_a1_a2"
-    merge_a0_a1 = graph_variant in {"no_a2_merge_a0_a1", "no_a2_merge_a0_a1_strict"}
+    merge_a0_a1 = graph_variant in {
+        "no_a2_merge_a0_a1",
+        "no_a2_merge_a0_a1_strict",
+        "no_a2_merge_a0_a1_no_a3b",
+    }
     merge_a1_a3 = graph_variant == "no_a2_merge_a1_a3"
     merge_a0_a1_a3 = graph_variant == "no_a2_merge_a0_a1_a3"
     frontend_strict = graph_variant in {"no_a2_frontend_strict", "no_a2_merge_a0_a1_strict"}
@@ -200,7 +205,7 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
         "no_a2_merge_a1_a3",
         "no_a2_merge_a0_a1_a3",
     }
-    skip_a3b = graph_variant == "no_a2_no_a3b"
+    skip_a3b = graph_variant in {"no_a2_no_a3b", "no_a2_merge_a0_a1_no_a3b"}
     skip_a7 = graph_variant == "no_a2_no_a7_a9"
     skip_a9 = graph_variant in {"no_a9", "no_a2_no_a9", "no_a2_no_a7_a9"}
 
