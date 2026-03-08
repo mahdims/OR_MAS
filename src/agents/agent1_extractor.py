@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from ..schemas import ModelPack, ComponentsNL
 from ..schemas import ContextContract
 from ..llm import llm_client
-from ..prompts import PROMPTS
+from ..prompts import PROMPTS, problem_input_note
 
 logger = structlog.get_logger(__name__)
 
@@ -26,7 +26,7 @@ STRICT FRONTEND RULES:
 
 
 async def a1_extractor(state: ModelPack) -> ModelPack:
-    """A1 - Extractor: Extract modeling components from NL."""
+    """A1 - Extractor: Extract modeling components from the problem input."""
 
     logger.info("a1_extractor_start", model_id=state.id)
 
@@ -37,8 +37,11 @@ async def a1_extractor(state: ModelPack) -> ModelPack:
 
     try:
         prompt_suffix = _frontend_prompt_suffix(state)
-        user_prompt = f"""Natural Language Problem:
+        input_note = problem_input_note(nl_problem)
+        user_prompt = f"""Problem Input:
 {nl_problem}
+
+{input_note}
 
 Context:
 - Objective: {state.context.get('objective_sense', 'not specified')}
@@ -69,7 +72,7 @@ Extract all modeling components. Mark variable types appropriately (integer/cont
 
 
 async def a0_a1_specify_extract(state: ModelPack) -> ModelPack:
-    """Combined A0+A1 frontend pass: problem contract + NL components."""
+    """Combined A0+A1 frontend pass: problem contract + extracted components."""
 
     logger.info("a0_a1_specify_extract_start", model_id=state.id)
 
@@ -80,8 +83,11 @@ async def a0_a1_specify_extract(state: ModelPack) -> ModelPack:
 
     try:
         prompt_suffix = _frontend_prompt_suffix(state)
-        user_prompt = f"""Natural Language Problem:
+        input_note = problem_input_note(nl_problem)
+        user_prompt = f"""Problem Input:
 {nl_problem}
+
+{input_note}
 
 Produce both:
 1. A normalized problem contract

@@ -1,8 +1,24 @@
 # modelpack/prompts.py
 
+
+def problem_input_note(problem_text: str) -> str:
+    text = str(problem_text or "").lstrip()
+    if text.startswith("Structured optimization problem specification:"):
+        return (
+            "Input mode: structured optimization specification.\n"
+            "Use the entities, data parameters, decisions, objective, and business "
+            "requirements directly."
+        )
+    if text.startswith("Natural language optimization problem:"):
+        return "Input mode: natural-language optimization problem description."
+    return "Input mode: optimization problem input."
+
+
 PROMPTS = {
     "A0_specifier": {
-        "system": """You are the Specifier agent. Normalize raw natural language optimization problems into a clear Problem Contract.
+        "system": """You are the Specifier agent. Normalize raw optimization problem inputs into a clear Problem Contract.
+
+The input may be either a natural-language description or a structured optimization specification.
 
 Extract and structure:
 1. Assumptions (implicit assumptions to make explicit)
@@ -14,7 +30,10 @@ Extract and structure:
 Use the provided JSON Schema exactly."""
     },
     "A1_extractor": {
-        "system": """You are the Extractor agent. Extract modeling components from the natural language problem.
+        "system": """You are the Extractor agent. Extract modeling components from the optimization problem input.
+
+The input may be either a natural-language description or a structured optimization specification.
+When the input is structured, use the provided sections directly instead of looking for prose-only cues.
 
 CRITICAL FOR VARIABLES:
 - Identify variable type based on context:

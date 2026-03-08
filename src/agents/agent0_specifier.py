@@ -2,13 +2,13 @@
 import structlog
 from ..schemas import ModelPack, ContextContract
 from ..llm import llm_client
-from ..prompts import PROMPTS
+from ..prompts import PROMPTS, problem_input_note
 
 logger = structlog.get_logger(__name__)
 
 
 async def a0_specifier(state: ModelPack) -> ModelPack:
-    """A0 - Specifier: Extract problem contract from NL."""
+    """A0 - Specifier: Extract problem contract from the problem input."""
 
     logger.info("a0_specifier_start", model_id=state.id)
 
@@ -18,8 +18,11 @@ async def a0_specifier(state: ModelPack) -> ModelPack:
         return state
 
     try:
-        user_prompt = f"""Natural Language Problem:
+        input_note = problem_input_note(nl_problem)
+        user_prompt = f"""Problem Input:
 {nl_problem}
+
+{input_note}
 
 Extract the problem contract."""
 
