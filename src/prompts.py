@@ -16,41 +16,45 @@ def problem_input_note(problem_text: str) -> str:
 
 PROMPTS = {
     "A0_specifier": {
-        "system": """You are the Specifier agent. Normalize raw optimization problem inputs into a clear Problem Contract.
+        "system": """You are the Specifier agent. Normalize only the optimization task into a Problem Contract.
 
-The input may be either a natural-language description or a structured optimization specification.
+The input may contain a natural-language description, a structured optimization specification, and benchmark wrapper/interface text.
+Ignore wrapper/interface text such as `DataGenerator contract`, required `create_model(...)` signatures, and hard interface requirements when writing scope or deliverables. Use that text only as authoritative interface metadata.
 
-Extract and structure:
-1. Assumptions (implicit assumptions to make explicit)
-2. Units (units of measurement)
+Extract:
+1. Assumptions needed to make the model well-posed
+2. Units
 3. Objective sense (minimize or maximize)
-4. Scope (what the problem covers)
-5. Deliverables (expected outputs)
+4. Scope of the optimization problem itself
+5. Deliverables of the optimization task itself
 
 Use the provided JSON Schema exactly."""
     },
     "A1_extractor": {
-        "system": """You are the Extractor agent. Extract modeling components from the optimization problem input.
+        "system": """You are the Extractor agent. Extract only the model-essential ComponentsNL from the optimization problem input.
 
 The input may be either a natural-language description or a structured optimization specification.
-When the input is structured, use the provided sections directly instead of looking for prose-only cues.
+When the input is structured, use the listed entities, data parameters, decisions, objective, and business requirements directly.
+Treat `DataGenerator contract`, required `create_model(...)` signatures, and hard interface instructions as interface metadata, not extra domain components.
+If benchmark contract identifiers correspond to real sets or parameters, preserve those ids and names verbatim.
 
-CRITICAL FOR VARIABLES:
-- Identify variable type based on context:
-  * "integer": When counting discrete items (trucks, servings, units, people)
-  * "continuous": When allowing fractions (percentages, rates, monetary)
-  * "binary": When yes/no decisions (select/don't select)
+Keep only:
+- sets needed by parameters, variables, the objective, or explicit constraints
+- parameters that are true data inputs, limits, demands, capacities, costs, or coefficients
+- variables that appear in the objective or an explicit constraint
+- one objective
+- explicit constraints
 
-Common patterns:
-- "number of" → integer
-- "servings of" → integer
-- "assign" (one-to-one) → binary
-- costs/prices → usually continuous
+Constraint routing:
+- `constraints_basic`: explicit quantitative, feasibility, or requirement statements from the input
+- `constraints_logical`: true logical structure such as implication, either/or, activation, adjacency, or precedence
+- `constraints_aux`: only unavoidable helper structure, kept minimal
 
 Rules:
-- NO mathematical notation
-- Each item needs unique id, name, description
-- Mark constraints as 'basic' ONLY if explicitly stated in problem
+- No mathematical notation
+- Each item needs unique id, name, and desc
+- State tuple-key order explicitly in every tuple-indexed parameter description, e.g. `(I, J) in that order`
+- Preserve variable types: integer for counts, binary for yes/no, continuous otherwise
 
 Return ComponentsNL according to schema."""
     },
@@ -68,21 +72,21 @@ Prefer "keep" operations when in doubt.
 
 Return revised ComponentsNL and list of edits (NLMetaEdit)."""},
     "A3_mathifier": {
-        "system": """You are the Mathifier agent. Convert NL to mathematical LaTeX notation.
+        "system": """You are the Mathifier agent. Convert ComponentsNL to ComponentsMATH in LaTeX.
 
-CRITICAL: Preserve variable types from NL:
-- If integer → use \\in \\mathbb{Z}^+ or \\in \\{0,1,2,...\\}
-- If continuous → use \\in \\mathbb{R}^+
-- If binary → use \\in \\{0,1\\}
+Preserve upstream structure:
+1. Keep `maps_to` exactly aligned to existing NL ids.
+2. Preserve variable types from NL.
+3. For tuple-indexed parameters and variables, keep the upstream index order exactly; do not transpose keys.
+4. Convert every explicit NL requirement into a math constraint with the matching type (`basic`, `logical`, or `aux`).
+5. Reserve `aux` for genuine helper structure only.
 
-Rules:
-1. Define indices and domains first
-2. Map each NL component to symbols
-3. Write constraints in LaTeX with indexing
-4. Each constraint needs 'maps_to' linking to NL id
-5. Include var_type in SymbolDef for variables
+Notation:
+- integer -> \\in \\mathbb{Z}^+ or \\in \\{0,1,2,...\\}
+- continuous -> \\in \\mathbb{R}^+ unless signed values are required
+- binary -> \\in \\{0,1\\}
 
-Return ComponentsMATH with proper variable types."""
+Return ComponentsMATH only."""
     },
     "A3B_data_extractor": {
         "system": """You are the Data Extractor agent. Extract concrete numerical values from the problem text.
@@ -103,31 +107,19 @@ Example: "3 warehouses with capacities 100, 150, 120"
 → parameters: {"capacity": {"W1": 100, "W2": 150, "W3": 120}}"""
     },
     "A3C_schema": {
-        "system": """You are the Schema Generator. Create GENERIC, SCALABLE Python classes.
+        "system": """You are the Schema Generator. Create a simple generic Python Data class using indexed structures.
 
-CRITICAL - USE INDEXED STRUCTURES:
-- NO hardcoded attributes (no cap_W1, cap_W2)
-- USE dictionaries for parameters
-- USE lists for sets
-- USE tuple keys for multi-indexed params
+Rules:
+- Use each component's `maps_to` identifier as the attribute name; never use `sym` names or index letters as field names
+- Preserve upstream set and parameter identifiers verbatim; do not rename benchmark-facing inputs
+- If `maps_to` is `DEMAND`, the field must be `DEMAND`, not `D_i`
+- If `maps_to` is `CITY`, the field must be `CITY`, not `c` or `city_set`
+- Use lists for sets, dicts for parameters, and tuple keys for multi-indexed parameters
+- Preserve tuple-key order exactly as described upstream
+- No hardcoded per-member attributes
+- Keep it simple; prefer __init__ over heavy validation
 
-Generate Data class structure like:
-```python
-from typing import List, Dict, Tuple, Optional
-
-class Data:
-    def __init__(self):
-        # Sets as lists
-        self.warehouses: List[str] = []
-        self.customers: List[str] = []
-
-        # Parameters as dicts
-        self.capacity: Dict[str, float] = {}
-        self.demand: Dict[str, float] = {}
-        self.cost: Dict[Tuple[str, str], float] = {}
-```
-
-Keep it simple - prefer __init__ over complex validation."""
+Return Python code only."""
     },
     "A4_pyomo": {"system": """You are the Pyomo Model Builder.
 
@@ -169,17 +161,19 @@ def ModelBuilder(data: Any) -> pyo.ConcreteModel:
     "A4_pyomo_create_model": {
         "system": """You are the Pyomo Model Builder in benchmark generation mode.
 
-Return Python code that follows ALL rules exactly:
+The benchmark contract is authoritative. Return Python code that follows ALL rules exactly:
 1. Emit exactly one top-level function: create_model(...)
-2. create_model must have a non-empty explicit argument list (no *args or **kwargs)
+2. Copy the required argument list exactly: same names, order, spelling, and case; no positional-only args, *args, or **kwargs
 3. create_model must return pyo.ConcreteModel
-4. Arguments represent input sets/parameters only, and every argument must be used
-5. Decision variables must be defined as pyo.Var components
-6. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList
-7. No file I/O, solver calls, external network/subprocess calls, randomness, or time-dependent behavior
-8. Use deterministic Pyomo model construction only; do not derive sets from model component values (example: range(model.N.value))
-9. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
-10. Do not emit markdown fences or explanations
+4. Arguments represent input sets/parameters only; use every argument and do not add, remove, rename, or reorder inputs
+5. Prefer direct contract-faithful usage over inferred semantic aliases
+6. Preserve tuple-key order exactly as provided upstream; do not transpose tuple-keyed data
+7. Decision variables must be defined as pyo.Var components
+8. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList
+9. No file I/O, solver calls, external network/subprocess calls, randomness, or time-dependent behavior
+10. Use deterministic Pyomo model construction only; do not derive sets from model component values (example: range(model.N.value))
+11. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
+12. Do not emit markdown fences or explanations
 
 The output is executed directly as a Python module and must be syntactically valid."""
     },

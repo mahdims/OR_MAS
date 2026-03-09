@@ -40,7 +40,9 @@ async def a3_mathifier(state: ModelPack) -> ModelPack:
 
 Objective Sense: {state.context.get('objective_sense', 'minimize')}
 
-Convert to mathematical notation in LaTeX. Preserve variable types (integer/continuous/binary).{prompt_suffix}"""
+Convert to mathematical notation in LaTeX.
+Preserve upstream ids via maps_to and preserve tuple/index order exactly as described in the NL components.
+Map every explicit NL requirement to a math constraint. Stay compact and non-speculative.{prompt_suffix}"""
 
         math_components = llm_client.structured_call(
             sys_prompt=PROMPTS["A3_mathifier"]["system"],
@@ -89,7 +91,8 @@ Context:
 Produce both:
 1. NL modeling components
 2. Mathematical components in LaTeX form
-Keep the two representations aligned one-to-one.{prompt_suffix}"""
+Keep the two representations aligned one-to-one.
+Preserve frontend ids and tuple/index order exactly, and keep the math compact and non-speculative.{prompt_suffix}"""
 
         class ExtractedMathBundle(BaseModel):
             components: ComponentsNL
@@ -148,7 +151,8 @@ Produce in one pass:
 1. A normalized problem contract
 2. NL modeling components
 3. Mathematical components in LaTeX form
-Keep all three representations mutually consistent.{prompt_suffix}"""
+Keep all three representations mutually consistent.
+Preserve frontend ids and tuple/index order exactly, and keep the math compact and non-speculative.{prompt_suffix}"""
 
         class FrontendBundle(BaseModel):
             contract: ContextContract

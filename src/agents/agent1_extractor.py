@@ -89,6 +89,11 @@ async def a0_a1_specify_extract(state: ModelPack) -> ModelPack:
 
 {input_note}
 
+Authoritative interface constraints inside Problem Input:
+- The `DataGenerator contract` block and required `create_model(...)` signature are binding interface constraints.
+- If those identifiers correspond to actual sets or parameters, preserve them verbatim in ids and names.
+- Do not treat wrapper/interface instructions as extra domain content.
+
 Produce both:
 1. A normalized problem contract
 2. The modeling components needed for optimization

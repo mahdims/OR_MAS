@@ -12,6 +12,13 @@ async def a3c_schema(state: ModelPack) -> ModelPack:
 
     logger.info("a3c_schema_start", model_id=state.id)
 
+    # In benchmark create_model mode the Data class is unused — A4 reads the
+    # DataGenerator contract directly from nl_problem. Skip to save an LLM call.
+    target_interface = str(state.context.get("target_interface") or "").strip()
+    if target_interface == "create_model":
+        logger.info("a3c_schema_skipped", reason="benchmark_create_model_mode")
+        return state
+
     if not state.components_math:
         logger.error("a3c_no_math_components")
         return state
@@ -21,6 +28,7 @@ async def a3c_schema(state: ModelPack) -> ModelPack:
 {state.components_math.model_dump_json(indent=2)}
 
 Generate a generic Data class using dictionaries for parameters and lists for sets.
+Use each component's `maps_to` identifier as the attribute name. Never use math symbols like `D_i`, `x_j`, or `c` as field names.
 NO hardcoded attributes for specific instances.
 Use tuple keys for multi-indexed parameters."""
 

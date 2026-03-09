@@ -1,5 +1,6 @@
 # modelpack/agents/agent4_pyomo.py
 import ast
+import re
 from typing import List, Optional, Set, Tuple
 
 import structlog
@@ -209,13 +210,13 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
 
     logger.info("a4_pyomo_start", model_id=state.id)
 
-    if not state.components_math or not state.code.data_schema:
+    target_interface = str(state.context.get("target_interface") or "").strip()
+    benchmark_mode = target_interface == "create_model"
+    if not state.components_math or (not benchmark_mode and not state.code.data_schema):
         logger.error("a4_missing_prerequisites")
         return state
 
     try:
-        target_interface = str(state.context.get("target_interface") or "").strip()
-        benchmark_mode = target_interface == "create_model"
         generation_mode = str(state.context.get("generation_mode") or "repair2").strip().lower()
         if generation_mode not in {"prompt_only", "repair2"}:
             generation_mode = "repair2"
@@ -235,38 +236,34 @@ Please address this feedback in your implementation.
 
         if benchmark_mode:
             nl_problem = str(state.context.get("nl_problem") or "")
+
+            # Extract exact create_model signature from the DataGenerator contract block in nl_problem
+            sig_match = re.search(
+                r"(def create_model\([^)]*\)\s*->\s*pyo\.ConcreteModel:)", nl_problem
+            )
+            signature_line = (
+                sig_match.group(1) if sig_match else "def create_model(...) -> pyo.ConcreteModel:"
+            )
+
             nl_components_json = (
                 state.components_nl.model_dump_json(indent=2)
                 if state.components_nl is not None
                 else "Not available"
             )
-            extracted_data_json = (
-                state.extracted_data.model_dump_json(indent=2)
-                if state.extracted_data is not None
-                else "Not available"
-            )
-            user_prompt = f"""Natural Language Problem:
+
+            user_prompt = f"""Problem description and interface contract:
 {nl_problem}
 
-Natural Language Components:
+Extracted modeling components:
 {nl_components_json}
 
-Mathematical Specification:
+Mathematical specification (LaTeX):
 {state.components_math.model_dump_json(indent=2)}
 
-Extracted Data:
-{extracted_data_json}
-
-Data Schema:
-```python
-{state.code.data_schema.source}
-```
-
 {feedback_context}
-
-Generate code with exactly one top-level function:
-create_model(...) -> pyo.ConcreteModel
-Follow the benchmark contract in the system prompt exactly.
+Implement exactly:
+{signature_line}
+Use only the parameter names from the DataGenerator contract above — do not rename or derive new parameters.
 """
             system_prompt = PROMPTS["A4_pyomo_create_model"]["system"]
         else:
