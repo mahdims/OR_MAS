@@ -5,8 +5,10 @@ import argparse
 import structlog
 from dotenv import load_dotenv
 
+from .agents.agent4_pyomo import _validate_create_model_entrypoint
 from .llm import llm_client
-from .schemas import ModelPack
+from .prompts import PROMPTS
+from .schemas import CodeBlob, ModelPack
 from .orchestration.graph import MAIN_FULL_GRAPH_VARIANT, create_app, create_generation_app
 
 load_dotenv()
@@ -81,6 +83,79 @@ async def run_generation_pipeline(
 
     logger.info("generation_pipeline_complete", status=result["model_pack"].status)
     return result["model_pack"]
+
+
+async def run_single_agent_generation(
+    problem_text: str,
+    generation_mode: str = "repair2",
+) -> ModelPack:
+    """Run a direct single-agent create_model baseline on the provided input."""
+    logger.info("starting_single_agent_generation", problem_length=len(problem_text))
+
+    model_pack = ModelPack()
+    model_pack.context["nl_problem"] = problem_text
+    model_pack.context["target_interface"] = "create_model"
+
+    normalized_mode = (generation_mode or "repair2").strip().lower()
+    if normalized_mode not in {"prompt_only", "repair2"}:
+        normalized_mode = "repair2"
+    model_pack.context["generation_mode"] = normalized_mode
+
+    system_prompt = PROMPTS["single_agent_create_model"]["system"]
+
+    trace_token = llm_client.begin_trace()
+    try:
+        code = llm_client.code_generation_call(
+            sys_prompt=system_prompt,
+            user_prompt=problem_text,
+            temperature=0.0,
+            validate=True,
+        )
+        valid, diagnostics = _validate_create_model_entrypoint(code)
+        if not valid and normalized_mode == "repair2":
+            repair_iterations = model_pack.tests.setdefault("repair_iterations", {})
+            repair_iterations["single_agent_validation"] = (
+                int(repair_iterations.get("single_agent_validation") or 0) + 1
+            )
+            diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
+            repair_prompt = f"""{problem_text}
+
+Validation diagnostics from the previous attempt:
+{diagnostic_lines}
+
+Previous code to repair:
+```python
+{code}
+```
+
+Return corrected code only."""
+            code = llm_client.code_generation_call(
+                sys_prompt=system_prompt,
+                user_prompt=repair_prompt,
+                temperature=0.0,
+                validate=True,
+            )
+            valid, diagnostics = _validate_create_model_entrypoint(code)
+
+        if not valid:
+            joined = ", ".join(diagnostics)
+            raise ValueError(f"single_agent_create_model_validation_failed: {joined}")
+
+        model_pack.code.model_builder = CodeBlob(
+            language="python",
+            filename="create_model.py",
+            source=code,
+        )
+        model_pack.status = "generated"
+    except Exception as exc:
+        logger.error("single_agent_generation_error", error=str(exc))
+        model_pack.status = "error"
+    finally:
+        trace_payload = llm_client.end_trace(trace_token)
+        _attach_llm_trace(model_pack, trace_payload)
+
+    logger.info("single_agent_generation_complete", status=model_pack.status)
+    return model_pack
 
 
 def main():
