@@ -236,6 +236,11 @@ Please address this feedback in your implementation.
 
         if benchmark_mode:
             nl_problem = str(state.context.get("nl_problem") or "")
+            problem_spec = re.split(
+                r"\nDataGenerator contract \(source of truth\):",
+                nl_problem,
+                maxsplit=1,
+            )[0].strip()
 
             # Extract exact create_model signature from the DataGenerator contract block in nl_problem
             sig_match = re.search(
@@ -251,8 +256,8 @@ Please address this feedback in your implementation.
                 else "Not available"
             )
 
-            user_prompt = f"""Problem description and interface contract:
-{nl_problem}
+            user_prompt = f"""Problem specification:
+{problem_spec or 'Not available'}
 
 Extracted modeling components:
 {nl_components_json}

@@ -118,14 +118,14 @@ The benchmark contract is authoritative. Return Python code that follows ALL rul
 2. Copy the required argument list exactly: same names, order, spelling, and case; no positional-only args, *args, or **kwargs
 3. create_model must return pyo.ConcreteModel
 4. Arguments represent input sets/parameters only; use every argument and do not add, remove, rename, or reorder inputs
-5. Prefer direct contract-faithful usage over inferred semantic aliases
+5. Use contract inputs and explicit requirements, not commentary or aliases
 6. Preserve tuple-key order exactly as provided upstream; do not transpose tuple-keyed data
 7. Decision variables must be defined as pyo.Var components
-8. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList
-9. No file I/O, solver calls, external network/subprocess calls, randomness, or time-dependent behavior
-10. Use deterministic Pyomo model construction only; do not derive sets from model component values (example: range(model.N.value))
+8. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList; use only pyo.minimize or pyo.maximize
+9. No file I/O, solver calls, network/subprocess calls, randomness, or time-dependent behavior
+10. Use deterministic Pyomo construction only; do not derive sets from model component values
 11. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
-12. Do not emit markdown fences or explanations
+12. No markdown fences or explanations
 
 The output is executed directly as a Python module and must be syntactically valid."""
     },
@@ -138,9 +138,9 @@ contract as binding.
 Modeling priorities:
 1. Be faithful to the stated objective and business requirements.
 2. Prefer the smallest correct model over a broad or speculative one.
-3. Use the provided input arguments directly; do not invent extra external inputs.
+3. Use provided arguments directly; do not invent inputs.
 4. When the input is structured, use its entities, data parameters, decisions,
-   objective, and requirements literally.
+   objective, and requirements; ignore commentary.
 5. When the input is natural language, infer only what is strongly supported by
    the text.
 
@@ -148,7 +148,7 @@ Pyomo requirements:
 - Return exactly one top-level function named create_model.
 - Keep the exact argument list and use every argument in model construction.
 - Return a pyo.ConcreteModel instance.
-- Use indexed Sets, Params, and Vars where appropriate.
+- Use indexed Sets, Params, and Vars; use pyo.minimize or pyo.maximize.
 - Use binary variables for selection, assignment, activation, or yes/no decisions.
 - Use integer variables for counts or indivisible quantities.
 - Use nonnegative continuous variables otherwise unless the text requires signed values.
@@ -185,9 +185,9 @@ Rules:
 Write `SolutionChecker(data, solution, tolerance=1e-6)`.
 
 Rules:
-- check only basic constraints
-- support dict-style or attribute-style data
+- check only listed basic constraints
+- support dict or attribute access
 - return `{\"feasible\": bool, \"violations\": str}`
-- be tolerant of normal numeric noise
+- tolerate noise; skip ambiguous checks
 - return code only"""},
 }

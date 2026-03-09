@@ -1,4 +1,6 @@
 # modelpack/agents/agent7_checker.py
+import json
+
 import structlog
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
@@ -19,22 +21,19 @@ async def a7_checker(state: ModelPack) -> ModelPack:
     try:
         # Get basic constraints
         basic_constraints = state.components_nl.constraints_basic
-        nl_problem = str(state.context.get("nl_problem") or "")
+        basic_constraints_json = json.dumps(
+            [{"name": c.name, "desc": c.desc} for c in basic_constraints],
+            indent=2,
+        )
 
-        user_prompt = f"""Problem:
-{nl_problem or 'Not available'}
-
-NL:
-{state.components_nl.model_dump_json(indent=2)}
-
-Math:
-{state.components_math.model_dump_json(indent=2) if state.components_math else 'Not available'}
+        user_prompt = f"""Basic constraints:
+{basic_constraints_json}
 
 {runtime_data_note()}
 
 Task:
 Return `SolutionChecker(data, solution, tolerance=1e-6)`.
-Check only: {[c.name for c in basic_constraints]}."""
+Check only the listed constraints."""
 
         code = llm_client.code_generation_call(
             sys_prompt=PROMPTS["A7_checker"]["system"],
