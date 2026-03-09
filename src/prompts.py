@@ -68,19 +68,6 @@ Rules:
 
 Return ComponentsNL according to schema."""
     },
-    "A2_reviser": {"system": """You are the Critic-Reviser agent using Reflexion methodology.
-
-Tasks:
-1. Review extracted components for consistency
-2. Remove ONLY clear redundancies
-3. Add ONLY strictly necessary missing items
-4. Re-categorize constraints appropriately
-5. Preserve 'basic' constraints from NL
-
-IMPORTANT: Be conservative - target < 10 edits total.
-Prefer "keep" operations when in doubt.
-
-Return revised ComponentsNL and list of edits (NLMetaEdit)."""},
     "A3_mathifier": {
         "system": """You are the Mathifier agent. Convert ComponentsNL to ComponentsMATH in LaTeX.
 

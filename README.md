@@ -1,10 +1,10 @@
 # Efficient Modeling MAS
 
-A multi-agent system that converts natural language optimization problems into executable Pyomo code.
+A benchmark-focused multi-agent system that converts optimization problems into executable Pyomo code.
 
 ## Overview
 
-This system uses an 8-agent pipeline to automatically:
+This repo keeps the benchmarked paths in active use:
 1. Parse natural language problem descriptions
 2. Extract mathematical components (sets, parameters, variables, constraints)
 3. Generate LaTeX formulations
@@ -47,19 +47,21 @@ python -m src
 ## Architecture
 
 ```
-A0 Specifier    → Extract problem contract
-A1 Extractor    → Identify components from NL
-A2 Reviser      → Reflexion-based cleanup
+Full graph:
+A0+A1 Frontend  → Contract + NL components
 A3 Mathifier    → Convert to LaTeX
-A4 Pyomo        → Generate model builder
-A5 DataGen      → Generate data functions
+A4 Pyomo        → Generate model code
+A5 DataGen      → Generate test data
 A6 Screen       → Feasibility testing
 A7 Checker      → Solution validator
 A8 Solver       → Execute optimization
 A9 Judge        → Cross-validate results
+
+Single-agent baseline:
+Problem input   → create_model directly
 ```
 
-Feedback loops route errors back to appropriate agents for automatic correction.
+The full graph keeps the A6/A9 feedback loops that are exercised by the benchmark.
 
 ## License
 

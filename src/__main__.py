@@ -9,7 +9,7 @@ from .agents.agent4_pyomo import _validate_create_model_entrypoint
 from .llm import llm_client
 from .prompts import PROMPTS
 from .schemas import CodeBlob, ModelPack
-from .orchestration.graph import MAIN_FULL_GRAPH_VARIANT, create_app, create_generation_app
+from .orchestration.graph import MAIN_FULL_GRAPH_VARIANT, create_app
 
 load_dotenv()
 logger = structlog.get_logger(__name__)
@@ -52,34 +52,6 @@ async def run_pipeline(
         _attach_llm_trace(target_model_pack, trace_payload)
 
     logger.info("pipeline_complete", status=result["model_pack"].status)
-    return result["model_pack"]
-
-
-async def run_generation_pipeline(
-    problem_text: str,
-    generation_mode: str = "repair2",
-) -> ModelPack:
-    """Run the generation-only pipeline (A0->A4) on a natural language problem."""
-    logger.info("starting_generation_pipeline", problem_length=len(problem_text))
-
-    model_pack = ModelPack()
-    model_pack.context["nl_problem"] = problem_text
-    model_pack.context["target_interface"] = "create_model"
-    model_pack.context["generation_mode"] = (generation_mode or "repair2").strip() or "repair2"
-
-    app = create_generation_app()
-    initial_state = {"model_pack": model_pack}
-
-    trace_token = llm_client.begin_trace()
-    result = None
-    try:
-        result = await app.ainvoke(initial_state)
-    finally:
-        trace_payload = llm_client.end_trace(trace_token)
-        target_model_pack = result["model_pack"] if result is not None else model_pack
-        _attach_llm_trace(target_model_pack, trace_payload)
-
-    logger.info("generation_pipeline_complete", status=result["model_pack"].status)
     return result["model_pack"]
 
 
