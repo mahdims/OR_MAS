@@ -156,7 +156,30 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
     return graph
 
 
+def create_generation_graph() -> StateGraph:
+    """Create the minimal MAS path that stops after Pyomo generation."""
+
+    graph = StateGraph(GraphState)
+
+    graph.add_node("A0A1_specify_extract", run_a0_a1)
+    graph.add_node("A3_mathifier", run_a3)
+    graph.add_node("A4_pyomo", run_a4)
+
+    graph.add_edge("A0A1_specify_extract", "A3_mathifier")
+    graph.add_edge("A3_mathifier", "A4_pyomo")
+    graph.add_edge("A4_pyomo", END)
+
+    graph.set_entry_point("A0A1_specify_extract")
+    return graph
+
+
 def create_app(graph_variant: str = MAIN_FULL_GRAPH_VARIANT):
     """Create compiled app without checkpointing."""
     graph = create_graph(graph_variant=graph_variant)
+    return graph.compile()
+
+
+def create_generation_app():
+    """Create compiled generation-only app without checkpointing."""
+    graph = create_generation_graph()
     return graph.compile()
