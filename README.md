@@ -4,7 +4,7 @@ A multi-agent system that converts natural language optimization problems into e
 
 ## Overview
 
-This system uses a 10-agent pipeline to automatically:
+This system uses an 8-agent pipeline to automatically:
 1. Parse natural language problem descriptions
 2. Extract mathematical components (sets, parameters, variables, constraints)
 3. Generate LaTeX formulations
@@ -51,8 +51,6 @@ A0 Specifier    → Extract problem contract
 A1 Extractor    → Identify components from NL
 A2 Reviser      → Reflexion-based cleanup
 A3 Mathifier    → Convert to LaTeX
-A3B DataExtract → Extract numerical values
-A3C Schema      → Generate Data classes
 A4 Pyomo        → Generate model builder
 A5 DataGen      → Generate data functions
 A6 Screen       → Feasibility testing

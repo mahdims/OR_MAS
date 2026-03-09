@@ -7,7 +7,7 @@ import structlog
 
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS
+from ..prompts import PROMPTS, runtime_data_note
 
 logger = structlog.get_logger(__name__)
 
@@ -212,7 +212,7 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
 
     target_interface = str(state.context.get("target_interface") or "").strip()
     benchmark_mode = target_interface == "create_model"
-    if not state.components_math or (not benchmark_mode and not state.code.data_schema):
+    if not state.components_math:
         logger.error("a4_missing_prerequisites")
         return state
 
@@ -267,18 +267,27 @@ Use only the parameter names from the DataGenerator contract above — do not re
 """
             system_prompt = PROMPTS["A4_pyomo_create_model"]["system"]
         else:
-            user_prompt = f"""Mathematical Specification:
+            nl_problem = str(state.context.get("nl_problem") or "")
+            nl_components_json = (
+                state.components_nl.model_dump_json(indent=2)
+                if state.components_nl is not None
+                else "Not available"
+            )
+            user_prompt = f"""Problem:
+{nl_problem or 'Not available'}
+
+NL:
+{nl_components_json}
+
+Math:
 {state.components_math.model_dump_json(indent=2)}
 
-Data Schema:
-```python
-{state.code.data_schema.source}
-```
+{runtime_data_note()}
 
 {feedback_context}
 
-Generate ModelBuilder(data: Any) -> pyo.ConcreteModel function.
-Follow the system prompt requirements exactly."""
+Task:
+Return `ModelBuilder(data: Any) -> pyo.ConcreteModel`."""
             system_prompt = PROMPTS["A4_pyomo"]["system"]
 
         if benchmark_mode:

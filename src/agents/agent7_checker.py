@@ -2,7 +2,7 @@
 import structlog
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS
+from ..prompts import PROMPTS, runtime_data_note
 
 logger = structlog.get_logger(__name__)
 
@@ -12,28 +12,29 @@ async def a7_checker(state: ModelPack) -> ModelPack:
 
     logger.info("a7_checker_start", model_id=state.id)
 
-    if not state.components_nl or not state.code.data_schema:
+    if not state.components_nl:
         logger.error("a7_missing_prerequisites")
         return state
 
     try:
         # Get basic constraints
         basic_constraints = state.components_nl.constraints_basic
+        nl_problem = str(state.context.get("nl_problem") or "")
 
-        user_prompt = f"""NL Components:
+        user_prompt = f"""Problem:
+{nl_problem or 'Not available'}
+
+NL:
 {state.components_nl.model_dump_json(indent=2)}
 
-Mathematical Specification:
+Math:
 {state.components_math.model_dump_json(indent=2) if state.components_math else 'Not available'}
 
-Data Schema:
-```python
-{state.code.data_schema.source}
-```
+{runtime_data_note()}
 
-Generate SolutionChecker(data, solution, tolerance=1e-6) function.
-Check ONLY basic constraints: {[c.name for c in basic_constraints]}
-Return dict with 'feasible' (bool) and 'violations' (str)."""
+Task:
+Return `SolutionChecker(data, solution, tolerance=1e-6)`.
+Check only: {[c.name for c in basic_constraints]}."""
 
         code = llm_client.code_generation_call(
             sys_prompt=PROMPTS["A7_checker"]["system"],

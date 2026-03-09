@@ -35,9 +35,7 @@ async def run_pipeline(
     target_interface = (target_interface or "").strip()
     if target_interface:
         model_pack.context["target_interface"] = target_interface
-        model_pack.context["generation_mode"] = (
-            (generation_mode or "repair2").strip() or "repair2"
-        )
+        model_pack.context["generation_mode"] = (generation_mode or "repair2").strip() or "repair2"
 
     # Create and run app
     app = create_app(graph_variant=graph_variant)
@@ -211,8 +209,6 @@ def main():
 
     if result.code.model_builder:
         print(f"\nModel Builder: {result.code.model_builder.filename}")
-    if result.code.data_schema:
-        print(f"Data Schema: {result.code.data_schema.filename}")
     if result.code.datagen:
         print(f"Data Generator: {result.code.datagen.filename}")
     if result.code.solution_checker:

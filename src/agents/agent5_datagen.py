@@ -1,8 +1,8 @@
 # modelpack/agents/agent5_datagen.py
 import structlog
-from ..schemas import ModelPack, CodeBlob, Feedback
+from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS
+from ..prompts import PROMPTS, runtime_data_note
 
 logger = structlog.get_logger(__name__)
 
@@ -12,8 +12,8 @@ async def a5_datagen(state: ModelPack) -> ModelPack:
 
     logger.info("a5_datagen_start", model_id=state.id)
 
-    if not state.code.data_schema:
-        logger.error("a5_no_schema")
+    if not state.components_math:
+        logger.error("a5_missing_prerequisites")
         return state
 
     try:
@@ -30,29 +30,29 @@ Proposed Fix: {feedback.proposed_fix}
 Please address this feedback in your implementation.
 """
 
-        # Include extracted data if available
-        extracted_info = ""
-        if state.extracted_data:
-            extracted_info = f"""
-Extracted Data (use these exact values when available):
-{state.extracted_data.model_dump_json(indent=2)}
-"""
+        nl_problem = str(state.context.get("nl_problem") or "")
+        nl_components_json = (
+            state.components_nl.model_dump_json(indent=2)
+            if state.components_nl is not None
+            else "Not available"
+        )
 
-        user_prompt = f"""Mathematical Specification:
+        user_prompt = f"""Problem:
+{nl_problem or 'Not available'}
+
+NL:
+{nl_components_json}
+
+Math:
 {state.components_math.model_dump_json(indent=2) if state.components_math else 'Not available'}
 
-Data Schema:
-```python
-{state.code.data_schema.source}
-```
-
-{extracted_info}
+{runtime_data_note()}
 
 {feedback_context}
 
-Generate DataGen(seed: int, extracted_data: dict = None) -> Data function.
-Priority: Use extracted_data if provided, otherwise generate feasible test data.
-Use float for nutritional/continuous values, not int."""
+Task:
+Return `DataGen(seed: int) -> dict`.
+Generate feasible data."""
 
         code = llm_client.code_generation_call(
             sys_prompt=PROMPTS["A5_datagen"]["system"],

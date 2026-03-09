@@ -37,10 +37,6 @@ def load_modules_with_shared_namespace(code_pack) -> Dict[str, Any]:
         "Tuple": tuple,
     }
 
-    # Execute in order
-    if code_pack.data_schema:
-        exec(code_pack.data_schema.source, namespace)
-
     if code_pack.model_builder:
         # Remove bad import attempts
         import re

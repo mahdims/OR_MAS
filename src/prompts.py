@@ -14,6 +14,16 @@ def problem_input_note(problem_text: str) -> str:
     return "Input mode: optimization problem input."
 
 
+def runtime_data_note() -> str:
+    return """Data shape:
+- use upstream ids / `maps_to` names
+- sets: lists
+- scalar parameters: scalars
+- indexed parameters: dicts
+- tuple-indexed parameters: tuple keys in upstream order
+- support dict-style or attribute-style access"""
+
+
 PROMPTS = {
     "A0_specifier": {
         "system": """You are the Specifier agent. Normalize only the optimization task into a Problem Contract.
@@ -88,76 +98,18 @@ Notation:
 
 Return ComponentsMATH only."""
     },
-    "A3B_data_extractor": {
-        "system": """You are the Data Extractor agent. Extract concrete numerical values from the problem text.
-
-Look for:
-- Specific numbers mentioned (costs, capacities, demands)
-- Set members (list of items, locations, etc.)
-- Ratios and percentages
-- Time periods or quantities
-
-Return ExtractedData with:
-- sets: Dictionary of set names to member lists
-- parameters: Dictionary of parameter names to values
-- derived_values: Any calculated or implied values
-
-Example: "3 warehouses with capacities 100, 150, 120"
-→ sets: {"warehouses": ["W1", "W2", "W3"]}
-→ parameters: {"capacity": {"W1": 100, "W2": 150, "W3": 120}}"""
-    },
-    "A3C_schema": {
-        "system": """You are the Schema Generator. Create a simple generic Python Data class using indexed structures.
-
-Rules:
-- Use each component's `maps_to` identifier as the attribute name; never use `sym` names or index letters as field names
-- Preserve upstream set and parameter identifiers verbatim; do not rename benchmark-facing inputs
-- If `maps_to` is `DEMAND`, the field must be `DEMAND`, not `D_i`
-- If `maps_to` is `CITY`, the field must be `CITY`, not `c` or `city_set`
-- Use lists for sets, dicts for parameters, and tuple keys for multi-indexed parameters
-- Preserve tuple-key order exactly as described upstream
-- No hardcoded per-member attributes
-- Keep it simple; prefer __init__ over heavy validation
-
-Return Python code only."""
-    },
     "A4_pyomo": {"system": """You are the Pyomo Model Builder.
 
-CRITICAL REQUIREMENTS:
-1. DO NOT import Data class - it's passed as parameter
-2. Use INDEXED Pyomo components (no individual variables)
-3. Check variable types from math spec and use correct domains:
-   - integer → pyo.NonNegativeIntegers or pyo.Integers
-   - binary → pyo.Binary
-   - continuous → pyo.NonNegativeReals
-4. Constraint rules must return expressions, NOT True/False
-   - Use pyo.Constraint.Skip to skip
-   - Use pyo.Constraint.Feasible if always satisfied
+Write `ModelBuilder(data: Any) -> pyo.ConcreteModel`.
 
-Example structure:
-```python
-import pyomo.environ as pyo
-from typing import Any
-
-def ModelBuilder(data: Any) -> pyo.ConcreteModel:
-    m = pyo.ConcreteModel()
-
-    # Sets from lists
-    m.I = pyo.Set(initialize=data.warehouses)
-
-    # Parameters from dicts
-    m.capacity = pyo.Param(m.I, initialize=data.capacity)
-
-    # Variables with correct domain
-    m.x = pyo.Var(m.I, m.J, domain=pyo.NonNegativeIntegers)  # if integer
-
-    # Constraints with rules
-    def capacity_rule(m, i):
-        return sum(m.x[i, j] for j in m.J) <= m.capacity[i]
-    m.capacity_con = pyo.Constraint(m.I, rule=capacity_rule)
-
-    return m
-```"""},
+Rules:
+- runtime data is passed directly; do not import extra data modules
+- use indexed Pyomo Sets, Params, Vars, Objectives, and Constraints
+- map variable types correctly: integer, binary, continuous
+- constraint rules must return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible`
+- preserve upstream ids and tuple-key order
+- keep data access generic when practical so dict-style and attribute-style inputs both work
+- return code only"""},
     "A4_pyomo_create_model": {
         "system": """You are the Pyomo Model Builder in benchmark generation mode.
 
@@ -177,8 +129,7 @@ The benchmark contract is authoritative. Return Python code that follows ALL rul
 
 The output is executed directly as a Python module and must be syntactically valid."""
     },
-    "single_agent_create_model": {
-        "system": """You are a single-agent optimization modeler.
+    "single_agent_create_model": {"system": """You are a single-agent optimization modeler.
 
 Convert the provided optimization problem input directly into executable Pyomo code.
 The input already contains the exact create_model interface contract; treat that
@@ -217,27 +168,26 @@ Before finalizing, internally verify:
 - there is at least one constraint
 - the code is valid Python
 
-Output code only."""
-    },
+Output code only."""},
     "A5_datagen": {"system": """You are the DataGen Author.
 
-Generate DataGen function that:
-1. First checks if extracted_data exists in context
-2. If yes, uses those exact values
-3. If no, generates reasonable test values
-4. Ensures feasibility (e.g., supply >= demand)
+Write `DataGen(seed: int) -> dict`.
 
-The Data class is already defined.
-
-IMPORTANT: Nutritional/continuous values should be float, not int."""},
+Rules:
+- generate small feasible test data
+- use upstream ids as keys
+- sets are lists; indexed parameters are dicts
+- preserve tuple-key order
+- use float for continuous values
+- return code only"""},
     "A7_checker": {"system": """You are the SolutionChecker Author.
 
-Create function that:
-- Verifies ONLY basic constraints
-- Uses tolerance 1e-6
-- Accesses data generically (dictionaries/lists)
-- Returns {"feasible": bool, "violations": str}
+Write `SolutionChecker(data, solution, tolerance=1e-6)`.
 
-Handle both dict and object forms of data.
-Check variable types and validate accordingly."""},
+Rules:
+- check only basic constraints
+- support dict-style or attribute-style data
+- return `{\"feasible\": bool, \"violations\": str}`
+- be tolerant of normal numeric noise
+- return code only"""},
 }

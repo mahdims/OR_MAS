@@ -38,8 +38,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
             raise ValueError("ModelBuilder or create_model not found in namespace")
 
         # Try to build with test instance to catch errors early
-        extracted = state.extracted_data.dict() if state.extracted_data else {}
-        test_data = DataGen(0, extracted_data=extracted)
+        test_data = DataGen(0)
 
         try:
             # This is where Pyomo errors occur
@@ -71,7 +70,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                 fix = "Constraints must return Pyomo expressions, not True/False. Use pyo.Constraint.Skip or pyo.Constraint.Feasible."
             elif "AttributeError" in error_str:
                 feedback_issue = "code_build_error"
-                fix = "Check data attribute access. The Data class structure may not match what ModelBuilder expects."
+                fix = "Check runtime data access. ModelBuilder may not match the generated data keys or attributes."
             elif "must be integer" in error_str:
                 feedback_issue = "type_mismatch"
                 fix = "Data type mismatch. Use float for continuous values, not int."
@@ -130,7 +129,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
 
         for seed in range(4):
             try:
-                data = DataGen(seed, extracted_data=extracted)
+                data = DataGen(seed)
                 if ModelBuilder:
                     model = ModelBuilder(data)
                 else:

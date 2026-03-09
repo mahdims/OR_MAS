@@ -9,8 +9,6 @@ from ..agents import (
     agent1_extractor,
     agent2_reviser,
     agent3_mathifier,
-    agent3b_data_extractor,
-    agent3c_schema,
     agent4_pyomo,
     agent5_datagen,
     agent6_screen,
@@ -22,14 +20,17 @@ from ..agents import (
 logger = structlog.get_logger(__name__)
 
 # Best current full-graph baseline from local ablations.
-MAIN_FULL_GRAPH_VARIANT = "no_a2_merge_a0_a1_no_a3b"
-GRAPH_VARIANT_ALIASES = {"main": MAIN_FULL_GRAPH_VARIANT}
+MAIN_FULL_GRAPH_VARIANT = "no_a2_merge_a0_a1"
+GRAPH_VARIANT_ALIASES = {
+    "main": MAIN_FULL_GRAPH_VARIANT,
+    "no_a2_no_a3b": "no_a2",
+    "no_a2_merge_a0_a1_no_a3b": "no_a2_merge_a0_a1",
+}
 FULL_GRAPH_VARIANTS = {
     "full",
     "no_a2",
     "no_a9",
     "merge_a1_a2",
-    "no_a2_no_a3b",
     "no_a2_no_a9",
     "no_a2_no_a7_a9",
     "no_a2_frontend_strict",
@@ -37,7 +38,6 @@ FULL_GRAPH_VARIANTS = {
     "no_a2_merge_a0_a1_strict",
     "no_a2_merge_a1_a3",
     "no_a2_merge_a0_a1_a3",
-    "no_a2_merge_a0_a1_no_a3b",
 }
 
 
@@ -99,16 +99,6 @@ async def run_a1_a3_merged(state: GraphState) -> GraphState:
 
 async def run_a0_a1_a3_merged(state: GraphState) -> GraphState:
     state["model_pack"] = await agent3_mathifier.a0_a1_a3_frontend_bundle(state["model_pack"])
-    return state
-
-
-async def run_a3b(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent3b_data_extractor.a3b_data_extractor(state["model_pack"])
-    return state
-
-
-async def run_a3c(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent3c_schema.a3c_schema(state["model_pack"])
     return state
 
 
@@ -189,14 +179,12 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
     merge_a0_a1 = graph_variant in {
         "no_a2_merge_a0_a1",
         "no_a2_merge_a0_a1_strict",
-        "no_a2_merge_a0_a1_no_a3b",
     }
     merge_a1_a3 = graph_variant == "no_a2_merge_a1_a3"
     merge_a0_a1_a3 = graph_variant == "no_a2_merge_a0_a1_a3"
     frontend_strict = graph_variant in {"no_a2_frontend_strict", "no_a2_merge_a0_a1_strict"}
     skip_a2 = graph_variant in {
         "no_a2",
-        "no_a2_no_a3b",
         "no_a2_no_a9",
         "no_a2_no_a7_a9",
         "no_a2_frontend_strict",
@@ -205,7 +193,6 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
         "no_a2_merge_a1_a3",
         "no_a2_merge_a0_a1_a3",
     }
-    skip_a3b = graph_variant in {"no_a2_no_a3b", "no_a2_merge_a0_a1_no_a3b"}
     skip_a7 = graph_variant == "no_a2_no_a7_a9"
     skip_a9 = graph_variant in {"no_a9", "no_a2_no_a9", "no_a2_no_a7_a9"}
 
@@ -233,9 +220,6 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
         if not merge_a1_a3:
             graph.add_node("A3_mathifier", run_a3_strict if frontend_strict else run_a3)
 
-    if not skip_a3b:
-        graph.add_node("A3B_data_extractor", run_a3b)
-    graph.add_node("A3C_schema", run_a3c)
     graph.add_node("A4_pyomo", run_a4)
     graph.add_node("A5_datagen", run_a5)
     graph.add_node("A6_screen", run_a6)
@@ -247,17 +231,17 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
 
     # Add edges (happy path)
     if merge_a0_a1_a3:
-        graph.add_edge("A0A1A3_frontend_bundle", "A3C_schema" if skip_a3b else "A3B_data_extractor")
+        graph.add_edge("A0A1A3_frontend_bundle", "A4_pyomo")
     elif merge_a0_a1:
         graph.add_edge("A0A1_specify_extract", "A3_mathifier")
-        graph.add_edge("A3_mathifier", "A3C_schema" if skip_a3b else "A3B_data_extractor")
+        graph.add_edge("A3_mathifier", "A4_pyomo")
     elif merge_a1_a3:
         graph.add_edge("A0_specifier", "A1A3_extract_mathify")
-        graph.add_edge("A1A3_extract_mathify", "A3C_schema" if skip_a3b else "A3B_data_extractor")
+        graph.add_edge("A1A3_extract_mathify", "A4_pyomo")
     elif merge_a1_a2:
         graph.add_edge("A0_specifier", "A1A2_extract_revise")
         graph.add_edge("A1A2_extract_revise", "A3_mathifier")
-        graph.add_edge("A3_mathifier", "A3C_schema" if skip_a3b else "A3B_data_extractor")
+        graph.add_edge("A3_mathifier", "A4_pyomo")
     else:
         graph.add_edge("A0_specifier", "A1_extractor")
         if skip_a2:
@@ -265,14 +249,7 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
         else:
             graph.add_edge("A1_extractor", "A2_reviser")
             graph.add_edge("A2_reviser", "A3_mathifier")
-        if skip_a3b:
-            graph.add_edge("A3_mathifier", "A3C_schema")
-        else:
-            graph.add_edge("A3_mathifier", "A3B_data_extractor")
-            graph.add_edge("A3B_data_extractor", "A3C_schema")
-    if not skip_a3b and (merge_a0_a1 or merge_a1_a3 or merge_a0_a1_a3):
-        graph.add_edge("A3B_data_extractor", "A3C_schema")
-    graph.add_edge("A3C_schema", "A4_pyomo")
+        graph.add_edge("A3_mathifier", "A4_pyomo")
     graph.add_edge("A4_pyomo", "A5_datagen")
     graph.add_edge("A5_datagen", "A6_screen")
     # Conditional after A6
@@ -326,16 +303,12 @@ def create_generation_graph() -> StateGraph:
     graph.add_node("A1_extractor", run_a1)
     graph.add_node("A2_reviser", run_a2)
     graph.add_node("A3_mathifier", run_a3)
-    graph.add_node("A3B_data_extractor", run_a3b)
-    graph.add_node("A3C_schema", run_a3c)
     graph.add_node("A4_pyomo", run_a4)
 
     graph.add_edge("A0_specifier", "A1_extractor")
     graph.add_edge("A1_extractor", "A2_reviser")
     graph.add_edge("A2_reviser", "A3_mathifier")
-    graph.add_edge("A3_mathifier", "A3B_data_extractor")
-    graph.add_edge("A3B_data_extractor", "A3C_schema")
-    graph.add_edge("A3C_schema", "A4_pyomo")
+    graph.add_edge("A3_mathifier", "A4_pyomo")
     graph.add_edge("A4_pyomo", END)
 
     graph.set_entry_point("A0_specifier")

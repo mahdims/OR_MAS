@@ -60,15 +60,6 @@ class ComponentsMATH(BaseModel):
     sense: Optional[Literal["min", "max"]] = None
 
 
-# ---- Data Extraction ----
-class ExtractedData(BaseModel):
-    """Concrete data values extracted from NL problem."""
-
-    sets: Dict[str, List[Any]] = Field(default_factory=dict)
-    parameters: Dict[str, Any] = Field(default_factory=dict)
-    derived_values: Dict[str, Any] = Field(default_factory=dict)
-
-
 # ---- Code Artifacts ----
 class CodeBlob(BaseModel):
     language: Literal["python"] = "python"
@@ -78,7 +69,6 @@ class CodeBlob(BaseModel):
 
 class CodePack(BaseModel):
     model_builder: Optional[CodeBlob] = None
-    data_schema: Optional[CodeBlob] = None
     datagen: Optional[CodeBlob] = None
     solution_checker: Optional[CodeBlob] = None
 
@@ -103,7 +93,6 @@ class Feedback(BaseModel):
         "checker_false_negative",
         "code_build_error",
         "domain_mismatch",
-        "schema_violation",
         "math_inconsistency",
         "pyomo_build_error",
         "type_mismatch",
@@ -130,7 +119,6 @@ class ModelPack(BaseModel):
     components_nl: Optional[ComponentsNL] = None
     components_nl_meta: Optional[ComponentsNLMETA] = None
     components_math: Optional[ComponentsMATH] = None
-    extracted_data: Optional[ExtractedData] = None  # NEW
     code: CodePack = Field(default_factory=CodePack)
     tests: Dict[str, Any] = Field(
         default_factory=lambda: {

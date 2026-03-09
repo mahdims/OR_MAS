@@ -36,12 +36,10 @@ async def a8_solver(state: ModelPack) -> ModelPack:
             return state
         logger.info("a8_solver_selected", solver=solver_name)
 
-        extracted = state.extracted_data.dict() if state.extracted_data else {}
-
         # Solve multiple instances
         for seed in range(3):
             try:
-                data = DataGen(seed, extracted_data=extracted)
+                data = DataGen(seed)
                 if ModelBuilder:
                     model = ModelBuilder(data)
                 else:
