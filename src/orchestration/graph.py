@@ -75,13 +75,9 @@ def route_after_a6(state: GraphState) -> str:
     """Route after feasibility screen."""
     feedback = state["model_pack"].tests.get("last_feedback")
 
-    if feedback:
-        if feedback.target_agent == "A4":
-            logger.info("routing_to_a4", issue=feedback.issue)
-            return "A4_pyomo"
-        if feedback.target_agent == "A5":
-            logger.info("routing_to_a5", issue=feedback.issue)
-            return "A5_datagen"
+    if feedback and feedback.target_agent == "A4":
+        logger.info("routing_to_a4", issue=feedback.issue)
+        return "A4_pyomo"
 
     return "A7_checker"
 
@@ -90,13 +86,8 @@ def route_after_a9(state: GraphState) -> str:
     """Route after cross-validation."""
     feedback = state["model_pack"].tests.get("last_feedback")
 
-    if feedback:
-        if feedback.issue == "checker_false_negative":
-            return "A7_checker"
-        if feedback.issue == "data_infeasible":
-            return "A5_datagen"
-        if feedback.issue == "code_build_error":
-            return "A4_pyomo"
+    if feedback and feedback.issue == "checker_false_negative":
+        return "A7_checker"
 
     return "END"
 
@@ -137,7 +128,6 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
         route_after_a6,
         {
             "A4_pyomo": "A4_pyomo",
-            "A5_datagen": "A5_datagen",
             "A7_checker": "A7_checker",
         },
     )
@@ -146,8 +136,6 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
         route_after_a9,
         {
             "A7_checker": "A7_checker",
-            "A5_datagen": "A5_datagen",
-            "A4_pyomo": "A4_pyomo",
             "END": END,
         },
     )

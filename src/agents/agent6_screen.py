@@ -73,20 +73,10 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                 fix = "Check runtime data access. ModelBuilder may not match the generated data keys or attributes."
             elif "must be integer" in error_str:
                 feedback_issue = "type_mismatch"
-                fix = "Data type mismatch. Use float for continuous values, not int."
-                # Route to A5 for data type issues
-                repair_iterations = state.tests.setdefault("repair_iterations", {})
-                repair_iterations["A6_to_A5"] = int(repair_iterations.get("A6_to_A5") or 0) + 1
-                state.tests["last_feedback"] = Feedback(
-                    source_agent="A6",
-                    target_agent="A5",
-                    issue=feedback_issue,
-                    evidence={"error": error_str},
-                    proposed_fix=fix,
-                    retry_count=retry_count,
+                fix = (
+                    "Data type mismatch during screen build. Ensure the generated Pyomo model "
+                    "accepts the runtime data types emitted by DataGen."
                 )
-                state.tests["retry_counts"][retry_key] = retry_count + 1
-                return state
             else:
                 feedback_issue = "pyomo_build_error"
                 fix = f"ModelBuilder failed: {error_str}\nCheck Pyomo syntax and data access patterns."
@@ -181,16 +171,25 @@ async def a6_screen(state: ModelPack) -> ModelPack:
 
         # Check for data issues
         if infeasible_count > 2:
-            repair_iterations = state.tests.setdefault("repair_iterations", {})
-            repair_iterations["A6_to_A5"] = int(repair_iterations.get("A6_to_A5") or 0) + 1
-            feedback = Feedback(
-                source_agent="A6",
-                target_agent="A5",
-                issue="data_infeasible",
-                evidence={"infeasible_count": infeasible_count, "total_tested": 4},
-                proposed_fix="Adjust data generation for feasibility",
-            )
-            state.tests["last_feedback"] = feedback
+            if retry_count >= MAX_RETRIES:
+                logger.warning("a6_max_retries", retries=retry_count)
+                state.tests["last_feedback"] = None
+            else:
+                repair_iterations = state.tests.setdefault("repair_iterations", {})
+                repair_iterations["A6_to_A4"] = int(repair_iterations.get("A6_to_A4") or 0) + 1
+                feedback = Feedback(
+                    source_agent="A6",
+                    target_agent="A4",
+                    issue="data_infeasible",
+                    evidence={"infeasible_count": infeasible_count, "total_tested": 4},
+                    proposed_fix=(
+                        "Screen instances are mostly infeasible. Review the generated model's "
+                        "assumptions and constraints against the runtime data contract."
+                    ),
+                    retry_count=retry_count,
+                )
+                state.tests["last_feedback"] = feedback
+                state.tests["retry_counts"][retry_key] = retry_count + 1
         else:
             state.tests["last_feedback"] = None
 
