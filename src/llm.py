@@ -109,9 +109,7 @@ class LLMClient:
 
         if hasattr(usage_obj, "__dict__"):
             payload = {
-                key: value
-                for key, value in vars(usage_obj).items()
-                if not key.startswith("_")
+                key: value for key, value in vars(usage_obj).items() if not key.startswith("_")
             }
             if payload:
                 return payload
