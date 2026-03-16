@@ -7,7 +7,7 @@ import structlog
 
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS, runtime_data_note
+from ..prompts import PROMPTS, compact_feedback_context, runtime_data_note
 
 logger = structlog.get_logger(__name__)
 
@@ -205,6 +205,15 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     return len(deduped) == 0, deduped
 
 
+def _extract_contract_block(prompt_text: str) -> str:
+    match = re.search(
+        r"DataGenerator contract \(source of truth\):\n(.*?)\n\nRequired create_model signature:",
+        str(prompt_text or ""),
+        flags=re.DOTALL,
+    )
+    return match.group(1).strip() if match else ""
+
+
 async def a4_pyomo(state: ModelPack) -> ModelPack:
     """A4 - Pyomo Builder: Generate Pyomo model code."""
 
@@ -222,17 +231,11 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
             generation_mode = "repair2"
 
         # Check for feedback
-        feedback_context = ""
+        feedback_note = ""
         feedback = state.tests.get("last_feedback")
         if feedback and feedback.target_agent == "A4":
-            feedback_context = f"""
-FEEDBACK FROM {feedback.source_agent}:
-Issue: {feedback.issue}
-Evidence: {feedback.evidence}
-Proposed Fix: {feedback.proposed_fix}
-
-Please address this feedback in your implementation.
-"""
+            feedback_note = compact_feedback_context(feedback)
+        feedback_context = f"Targeted feedback:\n{feedback_note}\n" if feedback_note else ""
 
         if benchmark_mode:
             nl_problem = str(state.context.get("nl_problem") or "")
@@ -241,6 +244,8 @@ Please address this feedback in your implementation.
                 nl_problem,
                 maxsplit=1,
             )[0].strip()
+            contract_block = _extract_contract_block(nl_problem)
+            math_spec_json = state.components_math.model_dump_json(indent=2)
 
             # Extract exact create_model signature from the DataGenerator contract block in nl_problem
             sig_match = re.search(
@@ -249,27 +254,29 @@ Please address this feedback in your implementation.
             signature_line = (
                 sig_match.group(1) if sig_match else "def create_model(...) -> pyo.ConcreteModel:"
             )
-
-            nl_components_json = (
-                state.components_nl.model_dump_json(indent=2)
-                if state.components_nl is not None
-                else "Not available"
+            user_prompt_sections = [
+                "Structured optimization specification:",
+                problem_spec or "Not available",
+                "Authoritative DataGenerator contract:",
+                contract_block or "Not available",
+                "Required interface:",
+                signature_line,
+                "Mathematical specification (LaTeX):",
+                math_spec_json,
+            ]
+            if feedback_note:
+                user_prompt_sections.extend(["Targeted feedback:", feedback_note])
+            user_prompt_sections.extend(
+                [
+                    "Task:",
+                    (
+                        "Return only the exact create_model implementation. "
+                        "Use only the contract inputs above, preserve tuple-key order, "
+                        "and do not rename parameters."
+                    ),
+                ]
             )
-
-            user_prompt = f"""Problem specification:
-{problem_spec or 'Not available'}
-
-Extracted modeling components:
-{nl_components_json}
-
-Mathematical specification (LaTeX):
-{state.components_math.model_dump_json(indent=2)}
-
-{feedback_context}
-Implement exactly:
-{signature_line}
-Use only the parameter names from the DataGenerator contract above — do not rename or derive new parameters.
-"""
+            user_prompt = "\n".join(user_prompt_sections)
             system_prompt = PROMPTS["A4_pyomo_create_model"]["system"]
         else:
             nl_problem = str(state.context.get("nl_problem") or "")
@@ -309,17 +316,27 @@ Return `ModelBuilder(data: Any) -> pyo.ConcreteModel`."""
                     int(repair_iterations.get("A4_validation") or 0) + 1
                 )
                 diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
-                repair_prompt = f"""{user_prompt}
-
-Validation diagnostics from previous attempt:
-{diagnostic_lines}
-
-Previous code to repair:
-```python
-{code}
-```
-
-Return corrected code only."""
+                repair_sections = [
+                    "Repair the existing create_model implementation.",
+                    "Authoritative DataGenerator contract:",
+                    contract_block or "Not available",
+                    "Required interface:",
+                    signature_line,
+                    "Mathematical specification (LaTeX):",
+                    math_spec_json,
+                ]
+                if feedback_note:
+                    repair_sections.extend(["Targeted feedback:", feedback_note])
+                repair_sections.extend(
+                    [
+                        "Validation diagnostics from previous attempt:",
+                        diagnostic_lines,
+                        "Previous code to repair:",
+                        f"```python\n{code}\n```",
+                        "Return corrected code only.",
+                    ]
+                )
+                repair_prompt = "\n".join(repair_sections)
                 repaired_code = llm_client.code_generation_call(
                     sys_prompt=system_prompt,
                     user_prompt=repair_prompt,

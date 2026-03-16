@@ -4,7 +4,7 @@ import json
 import structlog
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS, runtime_data_note
+from ..prompts import PROMPTS, compact_feedback_context, runtime_data_note
 
 logger = structlog.get_logger(__name__)
 
@@ -25,15 +25,35 @@ async def a7_checker(state: ModelPack) -> ModelPack:
             [{"name": c.name, "desc": c.desc} for c in basic_constraints],
             indent=2,
         )
+        feedback_note = ""
+        feedback = state.tests.get("last_feedback")
+        if feedback and feedback.target_agent == "A7":
+            feedback_note = compact_feedback_context(feedback)
 
-        user_prompt = f"""Basic constraints:
-{basic_constraints_json}
-
-{runtime_data_note()}
-
-Task:
-Return `SolutionChecker(data, solution, tolerance=1e-6)`.
-Check only the listed constraints."""
+        user_prompt_sections = [
+            "Basic constraints:",
+            basic_constraints_json,
+            runtime_data_note(),
+        ]
+        if feedback_note:
+            user_prompt_sections.extend(["Targeted feedback:", feedback_note])
+            if state.code.solution_checker and state.code.solution_checker.source:
+                user_prompt_sections.extend(
+                    [
+                        "Existing checker code to repair:",
+                        f"```python\n{state.code.solution_checker.source}\n```",
+                    ]
+                )
+        user_prompt_sections.extend(
+            [
+                "Task:",
+                (
+                    "Return `SolutionChecker(data, solution, tolerance=1e-6)`.\n"
+                    "Check only the listed constraints."
+                ),
+            ]
+        )
+        user_prompt = "\n\n".join(user_prompt_sections)
 
         code = llm_client.code_generation_call(
             sys_prompt=PROMPTS["A7_checker"]["system"],

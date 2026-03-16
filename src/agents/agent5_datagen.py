@@ -2,7 +2,7 @@
 import structlog
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS, runtime_data_note
+from ..prompts import PROMPTS, compact_feedback_context, runtime_data_note
 
 logger = structlog.get_logger(__name__)
 
@@ -21,14 +21,9 @@ async def a5_datagen(state: ModelPack) -> ModelPack:
         feedback_context = ""
         feedback = state.tests.get("last_feedback")
         if feedback and feedback.target_agent == "A5":
-            feedback_context = f"""
-FEEDBACK FROM {feedback.source_agent}:
-Issue: {feedback.issue}
-Evidence: {feedback.evidence}
-Proposed Fix: {feedback.proposed_fix}
-
-Please address this feedback in your implementation.
-"""
+            feedback_note = compact_feedback_context(feedback)
+            if feedback_note:
+                feedback_context = f"Targeted feedback:\n{feedback_note}\n"
 
         nl_problem = str(state.context.get("nl_problem") or "")
         nl_components_json = (

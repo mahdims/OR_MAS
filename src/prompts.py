@@ -1,4 +1,6 @@
 # modelpack/prompts.py
+import json
+from typing import Any
 
 
 def problem_input_note(problem_text: str) -> str:
@@ -22,6 +24,60 @@ def runtime_data_note() -> str:
 - indexed parameters: dicts
 - tuple-indexed parameters: tuple keys in upstream order
 - support dict-style or attribute-style access"""
+
+
+def _truncate_text(value: str, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3].rstrip()}..."
+
+
+def compact_feedback_context(
+    feedback: Any,
+    *,
+    max_evidence_chars: int = 400,
+    max_traceback_chars: int = 240,
+) -> str:
+    if feedback is None:
+        return ""
+
+    evidence = getattr(feedback, "evidence", None)
+    compact_evidence = {}
+    if isinstance(evidence, dict):
+        for key, value in evidence.items():
+            if key == "traceback" and value:
+                compact_evidence[key] = _truncate_text(str(value), max_traceback_chars)
+                continue
+            if key == "mismatches" and isinstance(value, list):
+                compact_evidence[key] = value[:2]
+                if len(value) > 2:
+                    compact_evidence["mismatches_extra"] = len(value) - 2
+                continue
+            compact_evidence[key] = value
+    elif evidence is not None:
+        compact_evidence["detail"] = evidence
+
+    lines = [
+        f"Feedback from {getattr(feedback, 'source_agent', 'unknown')}:",
+        f"- issue: {getattr(feedback, 'issue', 'unknown')}",
+    ]
+    if compact_evidence:
+        evidence_text = _truncate_text(
+            json.dumps(compact_evidence, ensure_ascii=False),
+            max_evidence_chars,
+        )
+        lines.append(f"- evidence: {evidence_text}")
+
+    proposed_fix = getattr(feedback, "proposed_fix", None)
+    if proposed_fix:
+        lines.append(f"- proposed fix: {_truncate_text(str(proposed_fix), 240)}")
+
+    retry_count = getattr(feedback, "retry_count", None)
+    if retry_count is not None:
+        lines.append(f"- retry count: {retry_count}")
+
+    return "\n".join(lines)
 
 
 PROMPTS = {
