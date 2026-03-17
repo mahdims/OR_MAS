@@ -13,7 +13,7 @@ import structlog
 from dotenv import load_dotenv
 from openai import OpenAI
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
 load_dotenv()
 logger = structlog.get_logger(__name__)
@@ -23,6 +23,10 @@ _ACTIVE_LLM_TRACE: ContextVar[Optional[List[Dict[str, Any]]]] = ContextVar(
     "ACTIVE_LLM_TRACE",
     default=None,
 )
+
+
+class NonRetryableLLMError(RuntimeError):
+    """Raised for deterministic LLM response issues that retries will not fix."""
 
 
 def _env_retry_attempts(default: int = 3) -> int:
@@ -191,6 +195,22 @@ class LLMClient:
             usage_obj = getattr(raw_response, "usage_metadata", None)
         return self._usage_to_dict(usage_obj)
 
+    def _extract_finish_reason(self, raw_response: Any) -> Optional[str]:
+        if raw_response is None:
+            return None
+        if isinstance(raw_response, dict):
+            choices = raw_response.get("choices")
+            if isinstance(choices, list) and choices:
+                finish_reason = choices[0].get("finish_reason")
+                return str(finish_reason) if finish_reason is not None else None
+            return None
+
+        choices = getattr(raw_response, "choices", None)
+        if not choices:
+            return None
+        finish_reason = getattr(choices[0], "finish_reason", None)
+        return str(finish_reason) if finish_reason is not None else None
+
     @staticmethod
     def _safe_int(value: Any) -> Optional[int]:
         if value is None:
@@ -241,6 +261,7 @@ class LLMClient:
 
         usage_payload = self._extract_usage_payload(raw_response)
         normalized_usage = self._normalize_usage(usage_payload)
+        finish_reason = self._extract_finish_reason(raw_response)
         trace.append(
             {
                 "sequence": len(trace) + 1,
@@ -254,6 +275,7 @@ class LLMClient:
                 "latency_seconds": round(latency_seconds, 6),
                 "success": success,
                 "error": error,
+                "finish_reason": finish_reason,
                 "input_tokens": normalized_usage["input_tokens"],
                 "output_tokens": normalized_usage["output_tokens"],
                 "total_tokens": normalized_usage["total_tokens"],
@@ -312,6 +334,7 @@ class LLMClient:
         return summary
 
     @retry(
+        retry=retry_if_not_exception_type(NonRetryableLLMError),
         stop=stop_after_attempt(_env_retry_attempts()),
         wait=wait_exponential(multiplier=1, min=2, max=60),
     )
@@ -375,6 +398,7 @@ class LLMClient:
             raise
 
     @retry(
+        retry=retry_if_not_exception_type(NonRetryableLLMError),
         stop=stop_after_attempt(_env_retry_attempts()),
         wait=wait_exponential(multiplier=1, min=2, max=60),
     )
@@ -406,7 +430,16 @@ class LLMClient:
                 if self.openai_extra_body is not None:
                     request_kwargs["extra_body"] = self.openai_extra_body
                 response = self.raw_client.chat.completions.create(**request_kwargs)
-                code = response.choices[0].message.content
+                choice = response.choices[0]
+                finish_reason = getattr(choice, "finish_reason", None)
+                if finish_reason == "length":
+                    raise NonRetryableLLMError(
+                        "model output truncated (finish_reason=length); "
+                        "increase OPENAI_CLIENT_MAX_COMPLETION_TOKENS or reduce prompt size"
+                    )
+                code = choice.message.content
+                if code is None:
+                    raise NonRetryableLLMError("model returned empty content")
 
             # Extract from markdown
             if "```python" in code:
