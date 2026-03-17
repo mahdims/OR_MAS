@@ -25,6 +25,17 @@ _ACTIVE_LLM_TRACE: ContextVar[Optional[List[Dict[str, Any]]]] = ContextVar(
 )
 
 
+def _env_retry_attempts(default: int = 3) -> int:
+    raw_value = os.getenv("OPENAI_CLIENT_MAX_ATTEMPTS")
+    if not raw_value:
+        return default
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        return default
+    return parsed_value if parsed_value > 0 else default
+
+
 class LLMClient:
     """Unified LLM client supporting multiple providers via instructor."""
 
@@ -55,8 +66,21 @@ class LLMClient:
             )
         else:
             self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+            timeout_seconds = None
+            timeout_raw = os.getenv("OPENAI_CLIENT_TIMEOUT_SECONDS")
+            if timeout_raw:
+                try:
+                    parsed_timeout = float(timeout_raw)
+                    if parsed_timeout > 0:
+                        timeout_seconds = parsed_timeout
+                except ValueError:
+                    timeout_seconds = None
             # OpenAI-compatible (OpenAI, DeepSeek, Qwen, local)
-            base_client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            base_client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                timeout=timeout_seconds,
+            )
             self.raw_client = base_client
             self.client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
 
@@ -247,7 +271,10 @@ class LLMClient:
             )
         return summary
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=60))
+    @retry(
+        stop=stop_after_attempt(_env_retry_attempts()),
+        wait=wait_exponential(multiplier=1, min=2, max=60),
+    )
     def structured_call(
         self, sys_prompt: str, user_prompt: str, pyd_model: Type[T], temperature: float = 0.0
     ) -> T:
@@ -302,7 +329,10 @@ class LLMClient:
             logger.error("structured_call_error", provider=self.provider, error=str(e))
             raise
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=60))
+    @retry(
+        stop=stop_after_attempt(_env_retry_attempts()),
+        wait=wait_exponential(multiplier=1, min=2, max=60),
+    )
     def code_generation_call(
         self, sys_prompt: str, user_prompt: str, temperature: float = 0.0, validate: bool = True
     ) -> str:
