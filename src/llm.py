@@ -57,6 +57,17 @@ def _env_optional_positive_int(name: str) -> Optional[int]:
     return parsed_value if parsed_value > 0 else None
 
 
+def _env_optional_nonnegative_int(name: str) -> Optional[int]:
+    raw_value = os.getenv(name)
+    if not raw_value:
+        return None
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        return None
+    return parsed_value if parsed_value >= 0 else None
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None or not raw_value.strip():
@@ -101,9 +112,9 @@ class LLMClient:
             _env_optional_positive_int("OPENAI_CLIENT_LENGTH_RETRY_MAX_COMPLETION_TOKENS")
             or DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS
         )
+        max_length_retries = _env_optional_nonnegative_int("OPENAI_CLIENT_MAX_LENGTH_RETRIES")
         self.max_length_retries = (
-            _env_optional_positive_int("OPENAI_CLIENT_MAX_LENGTH_RETRIES")
-            or DEFAULT_MAX_LENGTH_RETRIES
+            DEFAULT_MAX_LENGTH_RETRIES if max_length_retries is None else max_length_retries
         )
         self.allow_truncated_responses = _env_bool("OPENAI_CLIENT_ALLOW_TRUNCATION", default=False)
         reasoning_effort = os.getenv("OPENAI_CLIENT_REASONING_EFFORT")
