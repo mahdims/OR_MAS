@@ -27,8 +27,10 @@ Copy `.env.example` to `.env` and set your API key:
 
 ```env
 PROVIDER=openai          # or: gemini, deepseek, qwen
-MODEL_NAME=gpt-4o-mini
+MODEL_NAME=gpt-4.1
 API_KEY=your-api-key
+# Optional: stronger codegen-specific override
+# CODE_MODEL_NAME=gpt-4.1
 ```
 
 ## Usage

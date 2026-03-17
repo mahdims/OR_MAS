@@ -29,6 +29,12 @@ class NonRetryableLLMError(RuntimeError):
     """Raised for deterministic LLM response issues that retries will not fix."""
 
 
+DEFAULT_OPENAI_MODEL = "gpt-4.1"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-pro"
+DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS = 4096
+DEFAULT_MAX_LENGTH_RETRIES = 2
+
+
 def _env_retry_attempts(default: int = 3) -> int:
     raw_value = os.getenv("OPENAI_CLIENT_MAX_ATTEMPTS")
     if not raw_value:
@@ -51,6 +57,13 @@ def _env_optional_positive_int(name: str) -> Optional[int]:
     return parsed_value if parsed_value > 0 else None
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 class LLMClient:
     """Unified LLM client supporting multiple providers via instructor."""
 
@@ -61,19 +74,38 @@ class LLMClient:
         api_key: str = None,
         base_url: str = None,
     ):
-        self.model_name = (
-            model_name or os.getenv("MODEL_NAME") or os.getenv("DEFAULT_MODEL", "gpt-4o-mini")
-        )
+        configured_model_name = model_name or os.getenv("MODEL_NAME") or os.getenv("DEFAULT_MODEL")
         resolved_provider = provider or os.getenv("PROVIDER")
         if not resolved_provider:
-            resolved_provider = "gemini" if "gemini" in self.model_name.lower() else "openai"
+            resolved_provider = (
+                "gemini"
+                if configured_model_name and "gemini" in configured_model_name.lower()
+                else "openai"
+            )
         self.provider = resolved_provider.lower().replace("gemeni", "gemini")
+        if configured_model_name:
+            self.model_name = configured_model_name
+        elif self.provider == "gemini":
+            self.model_name = DEFAULT_GEMINI_MODEL
+        else:
+            self.model_name = DEFAULT_OPENAI_MODEL
+        self.structured_model_name = os.getenv("STRUCTURED_MODEL_NAME") or self.model_name
+        self.code_generation_model_name = os.getenv("CODE_MODEL_NAME") or self.model_name
         self.base_url = base_url or os.getenv("BASE_URL")
         openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         self.max_completion_tokens = (
             _env_optional_positive_int("OPENAI_CLIENT_MAX_COMPLETION_TOKENS")
             or _env_optional_positive_int("OPENAI_CLIENT_MAX_TOKENS")
         )
+        self.length_retry_max_completion_tokens = (
+            _env_optional_positive_int("OPENAI_CLIENT_LENGTH_RETRY_MAX_COMPLETION_TOKENS")
+            or DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS
+        )
+        self.max_length_retries = (
+            _env_optional_positive_int("OPENAI_CLIENT_MAX_LENGTH_RETRIES")
+            or DEFAULT_MAX_LENGTH_RETRIES
+        )
+        self.allow_truncated_responses = _env_bool("OPENAI_CLIENT_ALLOW_TRUNCATION", default=False)
         reasoning_effort = os.getenv("OPENAI_CLIENT_REASONING_EFFORT")
         reasoning_exclude = os.getenv("OPENAI_CLIENT_REASONING_EXCLUDE")
         self.openai_extra_body: Optional[Dict[str, Any]] = None
@@ -356,7 +388,7 @@ class LLMClient:
                 )
             else:
                 request_kwargs: Dict[str, Any] = {
-                    "model": self.model_name,
+                    "model": self.structured_model_name,
                     "messages": [
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": user_prompt},
@@ -418,25 +450,44 @@ class LLMClient:
                 code = response.text
             else:
                 request_kwargs: Dict[str, Any] = {
-                    "model": self.model_name,
+                    "model": self.code_generation_model_name,
                     "messages": [
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
                     "temperature": temperature,
                 }
-                if self.max_completion_tokens is not None:
-                    request_kwargs["max_completion_tokens"] = self.max_completion_tokens
-                if self.openai_extra_body is not None:
-                    request_kwargs["extra_body"] = self.openai_extra_body
-                response = self.raw_client.chat.completions.create(**request_kwargs)
-                choice = response.choices[0]
-                finish_reason = getattr(choice, "finish_reason", None)
-                if finish_reason == "length":
-                    raise NonRetryableLLMError(
-                        "model output truncated (finish_reason=length); "
-                        "increase OPENAI_CLIENT_MAX_COMPLETION_TOKENS or reduce prompt size"
+                effective_max_completion_tokens = self.max_completion_tokens
+                choice: Any = None
+                for retry_index in range(self.max_length_retries + 1):
+                    request_kwargs_attempt = dict(request_kwargs)
+                    if effective_max_completion_tokens is not None:
+                        request_kwargs_attempt["max_completion_tokens"] = (
+                            effective_max_completion_tokens
+                        )
+                    if self.openai_extra_body is not None:
+                        request_kwargs_attempt["extra_body"] = self.openai_extra_body
+                    response = self.raw_client.chat.completions.create(**request_kwargs_attempt)
+                    choice = response.choices[0]
+                    finish_reason = getattr(choice, "finish_reason", None)
+                    if finish_reason != "length" or self.allow_truncated_responses:
+                        break
+                    if retry_index >= self.max_length_retries:
+                        raise NonRetryableLLMError(
+                            "model output truncated (finish_reason=length) after retries; "
+                            "increase OPENAI_CLIENT_MAX_COMPLETION_TOKENS or reduce prompt size"
+                        )
+                    next_max_completion_tokens = max(
+                        (effective_max_completion_tokens or 0) * 2,
+                        self.length_retry_max_completion_tokens,
                     )
+                    logger.warning(
+                        "code_generation_truncated_retrying",
+                        model_name=self.code_generation_model_name,
+                        previous_max_completion_tokens=effective_max_completion_tokens,
+                        next_max_completion_tokens=next_max_completion_tokens,
+                    )
+                    effective_max_completion_tokens = next_max_completion_tokens
                 code = choice.message.content
                 if code is None:
                     raise NonRetryableLLMError("model returned empty content")
