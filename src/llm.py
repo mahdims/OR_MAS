@@ -36,6 +36,17 @@ def _env_retry_attempts(default: int = 3) -> int:
     return parsed_value if parsed_value > 0 else default
 
 
+def _env_optional_positive_int(name: str) -> Optional[int]:
+    raw_value = os.getenv(name)
+    if not raw_value:
+        return None
+    try:
+        parsed_value = int(raw_value)
+    except ValueError:
+        return None
+    return parsed_value if parsed_value > 0 else None
+
+
 class LLMClient:
     """Unified LLM client supporting multiple providers via instructor."""
 
@@ -54,6 +65,27 @@ class LLMClient:
             resolved_provider = "gemini" if "gemini" in self.model_name.lower() else "openai"
         self.provider = resolved_provider.lower().replace("gemeni", "gemini")
         self.base_url = base_url or os.getenv("BASE_URL")
+        openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        self.max_completion_tokens = (
+            _env_optional_positive_int("OPENAI_CLIENT_MAX_COMPLETION_TOKENS")
+            or _env_optional_positive_int("OPENAI_CLIENT_MAX_TOKENS")
+        )
+        reasoning_effort = os.getenv("OPENAI_CLIENT_REASONING_EFFORT")
+        reasoning_exclude = os.getenv("OPENAI_CLIENT_REASONING_EXCLUDE")
+        self.openai_extra_body: Optional[Dict[str, Any]] = None
+        if reasoning_effort or reasoning_exclude:
+            reasoning_config: Dict[str, Any] = {}
+            if reasoning_effort:
+                reasoning_config["effort"] = reasoning_effort
+            if reasoning_exclude:
+                reasoning_config["exclude"] = reasoning_exclude.strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "y",
+                }
+            if reasoning_config:
+                self.openai_extra_body = {"reasoning": reasoning_config}
 
         # Initialize client based on provider
         if self.provider == "gemini":
@@ -65,7 +97,15 @@ class LLMClient:
                 client=base_client, mode=instructor.Mode.GEMINI_JSON
             )
         else:
-            self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
+            if self.base_url and "openrouter.ai" in self.base_url.lower():
+                self.api_key = (
+                    api_key
+                    or openrouter_api_key
+                    or os.getenv("OPENAI_API_KEY")
+                    or os.getenv("API_KEY")
+                )
+            else:
+                self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
             timeout_seconds = None
             timeout_raw = os.getenv("OPENAI_CLIENT_TIMEOUT_SECONDS")
             if timeout_raw:
@@ -292,15 +332,20 @@ class LLMClient:
                     response_model=pyd_model,
                 )
             else:
-                result = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
+                request_kwargs: Dict[str, Any] = {
+                    "model": self.model_name,
+                    "messages": [
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    response_model=pyd_model,
-                    temperature=temperature,
-                )
+                    "response_model": pyd_model,
+                    "temperature": temperature,
+                }
+                if self.max_completion_tokens is not None:
+                    request_kwargs["max_completion_tokens"] = self.max_completion_tokens
+                if self.openai_extra_body is not None:
+                    request_kwargs["extra_body"] = self.openai_extra_body
+                result = self.client.chat.completions.create(**request_kwargs)
 
             self._record_call(
                 call_type="structured",
@@ -348,14 +393,19 @@ class LLMClient:
                 )
                 code = response.text
             else:
-                response = self.raw_client.chat.completions.create(
-                    model=self.model_name,
-                    messages=[
+                request_kwargs: Dict[str, Any] = {
+                    "model": self.model_name,
+                    "messages": [
                         {"role": "system", "content": sys_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=temperature,
-                )
+                    "temperature": temperature,
+                }
+                if self.max_completion_tokens is not None:
+                    request_kwargs["max_completion_tokens"] = self.max_completion_tokens
+                if self.openai_extra_body is not None:
+                    request_kwargs["extra_body"] = self.openai_extra_body
+                response = self.raw_client.chat.completions.create(**request_kwargs)
                 code = response.choices[0].message.content
 
             # Extract from markdown
