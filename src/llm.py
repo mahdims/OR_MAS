@@ -420,6 +420,7 @@ class LLMClient:
         response_model: Optional[str] = None,
         system_prompt: Optional[str] = None,
         user_prompt: Optional[str] = None,
+        prompt_messages: Optional[List[Dict[str, Any]]] = None,
         raw_output_text: Optional[str] = None,
         extracted_output: Any = None,
         trace_input: Optional[Dict[str, Any]] = None,
@@ -452,12 +453,48 @@ class LLMClient:
                 "prompt": {
                     "system": system_prompt,
                     "user": user_prompt,
+                    "messages": self._serialize_trace_value(prompt_messages),
                 },
                 "raw_output_text": raw_output_text,
                 "extracted_output": self._serialize_trace_value(extracted_output),
                 "trace_input": self._serialize_trace_value(trace_input),
             }
         )
+
+    def _normalize_chat_messages(
+        self,
+        *,
+        sys_prompt: Optional[str],
+        user_prompt: Optional[str],
+        messages: Optional[List[Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        if messages is not None:
+            normalized_messages: List[Dict[str, Any]] = []
+            for message in messages:
+                role = str(message.get("role") or "").strip()
+                content = message.get("content")
+                if not role:
+                    raise ValueError("Chat messages must include a non-empty role")
+                if content is None:
+                    raise ValueError("Chat messages must include content")
+                normalized_messages.append({"role": role, "content": str(content)})
+            if not normalized_messages:
+                raise ValueError("Chat messages must be non-empty")
+            return normalized_messages
+
+        return [
+            {"role": "system", "content": str(sys_prompt or "")},
+            {"role": "user", "content": str(user_prompt or "")},
+        ]
+
+    @staticmethod
+    def _messages_to_gemini_prompt(messages: List[Dict[str, Any]]) -> str:
+        sections: List[str] = []
+        for message in messages:
+            role = str(message.get("role") or "user").upper()
+            content = str(message.get("content") or "")
+            sections.append(f"{role}:\n{content}")
+        return "\n\n".join(sections)
 
     def _summarize_calls(self, calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         summary: Dict[str, Any] = {
@@ -599,10 +636,11 @@ class LLMClient:
     )
     def code_generation_call(
         self,
-        sys_prompt: str,
-        user_prompt: str,
+        sys_prompt: Optional[str] = None,
+        user_prompt: Optional[str] = None,
         temperature: float = 0.0,
         validate: bool = True,
+        messages: Optional[List[Dict[str, Any]]] = None,
         trace_input: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Generate code with optional validation."""
@@ -610,10 +648,20 @@ class LLMClient:
         started_perf = time.perf_counter()
         response: Any = None
         raw_output_text: Optional[str] = None
+        request_messages = self._normalize_chat_messages(
+            sys_prompt=sys_prompt,
+            user_prompt=user_prompt,
+            messages=messages,
+        )
+        request_system_prompt = None
+        request_user_prompt = None
+        if messages is None:
+            request_system_prompt = str(sys_prompt or "")
+            request_user_prompt = str(user_prompt or "")
         try:
             if self.provider == "gemini":
                 response = self.raw_client.generate_content(
-                    f"{sys_prompt}\n\n{user_prompt}",
+                    self._messages_to_gemini_prompt(request_messages),
                     generation_config=genai.GenerationConfig(temperature=temperature),
                 )
                 code = response.text
@@ -621,43 +669,13 @@ class LLMClient:
             else:
                 request_kwargs: Dict[str, Any] = {
                     "model": self.code_generation_model_name,
-                    "messages": [
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    "messages": request_messages,
                     "temperature": temperature,
                 }
-                effective_max_completion_tokens = self.max_completion_tokens
-                choice: Any = None
-                for retry_index in range(self.max_length_retries + 1):
-                    request_kwargs_attempt = dict(request_kwargs)
-                    if effective_max_completion_tokens is not None:
-                        request_kwargs_attempt["max_completion_tokens"] = (
-                            effective_max_completion_tokens
-                        )
-                    if self.openai_extra_body is not None:
-                        request_kwargs_attempt["extra_body"] = self.openai_extra_body
-                    response = self.raw_client.chat.completions.create(**request_kwargs_attempt)
-                    choice = response.choices[0]
-                    finish_reason = getattr(choice, "finish_reason", None)
-                    if finish_reason != "length" or self.allow_truncated_responses:
-                        break
-                    if retry_index >= self.max_length_retries:
-                        raise NonRetryableLLMError(
-                            "model output truncated (finish_reason=length) after retries; "
-                            "increase OPENAI_CLIENT_MAX_COMPLETION_TOKENS or reduce prompt size"
-                        )
-                    next_max_completion_tokens = max(
-                        (effective_max_completion_tokens or 0) * 2,
-                        self.length_retry_max_completion_tokens,
-                    )
-                    logger.warning(
-                        "code_generation_truncated_retrying",
-                        model_name=self.code_generation_model_name,
-                        previous_max_completion_tokens=effective_max_completion_tokens,
-                        next_max_completion_tokens=next_max_completion_tokens,
-                    )
-                    effective_max_completion_tokens = next_max_completion_tokens
+                if self.openai_extra_body is not None:
+                    request_kwargs["extra_body"] = self.openai_extra_body
+                response = self.raw_client.chat.completions.create(**request_kwargs)
+                choice = response.choices[0]
                 code = choice.message.content
                 if code is None:
                     raise NonRetryableLLMError("model returned empty content")
@@ -691,8 +709,9 @@ class LLMClient:
                 error=None,
                 temperature=temperature,
                 model_name=self.code_generation_model_name,
-                system_prompt=sys_prompt,
-                user_prompt=user_prompt,
+                system_prompt=request_system_prompt,
+                user_prompt=request_user_prompt,
+                prompt_messages=request_messages,
                 raw_output_text=raw_output_text or self._extract_response_text(response),
                 extracted_output=code,
                 trace_input=trace_input,
@@ -709,8 +728,9 @@ class LLMClient:
                 error=str(e),
                 temperature=temperature,
                 model_name=self.code_generation_model_name,
-                system_prompt=sys_prompt,
-                user_prompt=user_prompt,
+                system_prompt=request_system_prompt,
+                user_prompt=request_user_prompt,
+                prompt_messages=request_messages,
                 raw_output_text=raw_output_text or self._extract_response_text(response),
                 extracted_output=None,
                 trace_input=trace_input,

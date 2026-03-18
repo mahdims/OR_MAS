@@ -360,23 +360,18 @@ Math:
                 )
                 diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
                 repair_sections = [
-                    "Repair the existing create_model implementation.",
-                    "Required interface:",
-                    signature_line,
-                    "Mathematical specification (LaTeX):",
-                    math_spec_json,
+                    "Repair your previous create_model implementation.",
+                    "Keep the same required interface and upstream contract from the earlier messages.",
+                    "Validation diagnostics from the previous attempt:",
+                    diagnostic_lines,
                 ]
                 if feedback_note:
-                    repair_sections.extend(["Targeted feedback:", feedback_note])
-                repair_sections.extend(
-                    [
-                        "Validation diagnostics from previous attempt:",
-                        diagnostic_lines,
-                        "Previous code to repair:",
-                        f"```python\n{code}\n```",
-                        "Return corrected code only.",
-                    ]
-                )
+                    repair_sections.extend(
+                        [
+                            "Also address the targeted feedback already provided earlier in this conversation.",
+                        ]
+                    )
+                repair_sections.append("Return corrected code only.")
                 repair_prompt = "\n".join(repair_sections)
                 repair_trace_input = {
                     "agent": "A4_pyomo",
@@ -396,8 +391,12 @@ Math:
                     ],
                 }
                 repaired_code = llm_client.code_generation_call(
-                    sys_prompt=system_prompt,
-                    user_prompt=repair_prompt,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                        {"role": "assistant", "content": code},
+                        {"role": "user", "content": repair_prompt},
+                    ],
                     temperature=0.0,
                     validate=True,
                     trace_input=repair_trace_input,
