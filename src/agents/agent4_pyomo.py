@@ -7,7 +7,7 @@ import structlog
 
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS, compact_feedback_context, runtime_data_note
+from ..prompts import PROMPTS, compact_feedback_context, llm_problem_text, runtime_data_note
 
 logger = structlog.get_logger(__name__)
 
@@ -205,15 +205,6 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     return len(deduped) == 0, deduped
 
 
-def _extract_contract_block(prompt_text: str) -> str:
-    match = re.search(
-        r"DataGenerator contract \(source of truth\):\n(.*?)\n\nRequired create_model signature:",
-        str(prompt_text or ""),
-        flags=re.DOTALL,
-    )
-    return match.group(1).strip() if match else ""
-
-
 async def a4_pyomo(state: ModelPack) -> ModelPack:
     """A4 - Pyomo Builder: Generate Pyomo model code."""
 
@@ -238,16 +229,14 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
         feedback_context = f"Targeted feedback:\n{feedback_note}\n" if feedback_note else ""
 
         if benchmark_mode:
-            nl_problem = str(state.context.get("nl_problem") or "")
+            nl_problem = llm_problem_text(state.context.get("nl_problem") or "")
             problem_spec = re.split(
-                r"\nDataGenerator contract \(source of truth\):",
+                r"\nRequired create_model signature:",
                 nl_problem,
                 maxsplit=1,
             )[0].strip()
-            contract_block = _extract_contract_block(nl_problem)
             math_spec_json = state.components_math.model_dump_json(indent=2)
 
-            # Extract exact create_model signature from the DataGenerator contract block in nl_problem
             sig_match = re.search(
                 r"(def create_model\([^)]*\)\s*->\s*pyo\.ConcreteModel:)", nl_problem
             )
@@ -260,17 +249,12 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
                 "upstream_artifacts": [
                     {
                         "label": "problem_specification",
-                        "source": "state.context.nl_problem",
+                        "source": "llm_problem_text(state.context.nl_problem)",
                         "value": problem_spec,
                     },
                     {
-                        "label": "data_generator_contract",
-                        "source": "state.context.nl_problem",
-                        "value": contract_block,
-                    },
-                    {
                         "label": "required_interface",
-                        "source": "state.context.nl_problem",
+                        "source": "llm_problem_text(state.context.nl_problem)",
                         "value": signature_line,
                     },
                     {
@@ -291,8 +275,6 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
             user_prompt_sections = [
                 "Structured optimization specification:",
                 problem_spec or "Not available",
-                "Authoritative DataGenerator contract:",
-                contract_block or "Not available",
                 "Required interface:",
                 signature_line,
                 "Mathematical specification (LaTeX):",
@@ -313,7 +295,7 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
             user_prompt = "\n".join(user_prompt_sections)
             system_prompt = PROMPTS["A4_pyomo_create_model"]["system"]
         else:
-            nl_problem = str(state.context.get("nl_problem") or "")
+            nl_problem = llm_problem_text(state.context.get("nl_problem") or "")
             nl_components_json = (
                 state.components_nl.model_dump_json(indent=2)
                 if state.components_nl is not None
@@ -325,7 +307,7 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
                 "upstream_artifacts": [
                     {
                         "label": "problem_input",
-                        "source": "state.context.nl_problem",
+                        "source": "llm_problem_text(state.context.nl_problem)",
                         "value": nl_problem,
                     },
                     {
@@ -359,10 +341,7 @@ Math:
 
 {runtime_data_note()}
 
-{feedback_context}
-
-Task:
-Return `ModelBuilder(data: Any) -> pyo.ConcreteModel`."""
+{feedback_context}"""
             system_prompt = PROMPTS["A4_pyomo"]["system"]
 
         if benchmark_mode:
@@ -382,8 +361,6 @@ Return `ModelBuilder(data: Any) -> pyo.ConcreteModel`."""
                 diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
                 repair_sections = [
                     "Repair the existing create_model implementation.",
-                    "Authoritative DataGenerator contract:",
-                    contract_block or "Not available",
                     "Required interface:",
                     signature_line,
                     "Mathematical specification (LaTeX):",

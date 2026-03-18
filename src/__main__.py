@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 from .agents.agent4_pyomo import _validate_create_model_entrypoint
 from .llm import llm_client
-from .prompts import PROMPTS
+from .prompts import PROMPTS, llm_problem_text
 from .schemas import CodeBlob, ModelPack
 from .orchestration.graph import MAIN_FULL_GRAPH_VARIANT, create_app, create_generation_app
 
@@ -126,6 +126,7 @@ async def run_single_agent_generation(
     model_pack.context["generation_mode"] = normalized_mode
 
     system_prompt = PROMPTS["single_agent_create_model"]["system"]
+    llm_problem = llm_problem_text(problem_text)
 
     trace_token = llm_client.begin_trace()
     try:
@@ -134,14 +135,14 @@ async def run_single_agent_generation(
             "upstream_artifacts": [
                 {
                     "label": "problem_input",
-                    "source": "problem_text",
-                    "value": problem_text,
+                    "source": "llm_problem_text(problem_text)",
+                    "value": llm_problem,
                 }
             ],
         }
         code = llm_client.code_generation_call(
             sys_prompt=system_prompt,
-            user_prompt=problem_text,
+            user_prompt=llm_problem,
             temperature=0.0,
             validate=True,
             trace_input=trace_input,
@@ -153,7 +154,7 @@ async def run_single_agent_generation(
                 int(repair_iterations.get("single_agent_validation") or 0) + 1
             )
             diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
-            repair_prompt = f"""{problem_text}
+            repair_prompt = f"""{llm_problem}
 
 Validation diagnostics from the previous attempt:
 {diagnostic_lines}

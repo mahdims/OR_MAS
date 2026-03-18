@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 from ..schemas import ComponentsNL, ContextContract, ModelPack
 from ..llm import llm_client
-from ..prompts import PROMPTS, problem_input_note
+from ..prompts import PROMPTS, llm_problem_text, problem_input_note
 
 logger = structlog.get_logger(__name__)
 
@@ -20,14 +20,15 @@ async def a0_a1_specify_extract(state: ModelPack) -> ModelPack:
         return state
 
     try:
-        input_note = problem_input_note(nl_problem)
+        llm_problem = llm_problem_text(nl_problem)
+        input_note = problem_input_note(llm_problem)
         user_prompt = f"""Problem Input:
-{nl_problem}
+{llm_problem}
 
 {input_note}
 
 Authoritative interface constraints inside Problem Input:
-- The `DataGenerator contract` block and required `create_model(...)` signature are binding interface constraints.
+- The required `create_model(...)` signature is binding interface metadata.
 - If those identifiers correspond to actual sets or parameters, preserve them verbatim in ids and names.
 - Do not treat wrapper/interface instructions as extra domain content.
 
@@ -49,12 +50,12 @@ Produce both:
             "upstream_artifacts": [
                 {
                     "label": "problem_input",
-                    "source": "state.context.nl_problem",
-                    "value": nl_problem,
+                    "source": "llm_problem_text(state.context.nl_problem)",
+                    "value": llm_problem,
                 },
                 {
                     "label": "problem_input_note",
-                    "source": "problem_input_note(nl_problem)",
+                    "source": "problem_input_note(llm_problem)",
                     "value": input_note,
                 },
             ],

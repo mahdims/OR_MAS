@@ -1,5 +1,6 @@
 # modelpack/prompts.py
 import json
+import re
 from typing import Any
 
 
@@ -24,6 +25,24 @@ def runtime_data_note() -> str:
 - indexed parameters: dicts
 - tuple-indexed parameters: tuple keys in upstream order
 - support dict-style or attribute-style access"""
+
+
+def llm_problem_text(problem_text: str) -> str:
+    text = str(problem_text or "").strip()
+    if not text:
+        return ""
+    text = re.sub(
+        r"\nDataGenerator contract \(source of truth\):\n.*?\n\nRequired create_model signature:\n",
+        "\nRequired create_model signature:\n",
+        text,
+        flags=re.DOTALL,
+    )
+    text = re.sub(
+        r"\n\nHard interface requirements:\n(?:- .*(?:\n|$))*",
+        "",
+        text,
+    )
+    return text.strip()
 
 
 def _truncate_text(value: str, max_chars: int) -> str:
@@ -85,7 +104,7 @@ PROMPTS = {
         "system": """You are the Specifier agent. Normalize only the optimization task into a Problem Contract.
 
 The input may contain a natural-language description, a structured optimization specification, and benchmark wrapper/interface text.
-Ignore wrapper/interface text such as `DataGenerator contract`, required `create_model(...)` signatures, and hard interface requirements when writing scope or deliverables. Use that text only as authoritative interface metadata.
+Ignore wrapper/interface text such as required `create_model(...)` signatures when writing scope or deliverables. Use that text only as authoritative interface metadata.
 
 Extract:
 1. Assumptions needed to make the model well-posed
@@ -101,7 +120,7 @@ Use the provided JSON Schema exactly."""
 
 The input may be either a natural-language description or a structured optimization specification.
 When the input is structured, use the listed entities, data parameters, decisions, objective, and business requirements directly.
-Treat `DataGenerator contract`, required `create_model(...)` signatures, and hard interface instructions as interface metadata, not extra domain components.
+Treat required `create_model(...)` signatures as interface metadata, not extra domain components.
 If benchmark contract identifiers correspond to real sets or parameters, preserve those ids and names verbatim.
 
 Keep only:
@@ -159,16 +178,15 @@ Rules:
 The benchmark contract is authoritative. Return Python code that follows ALL rules exactly:
 1. Emit exactly one top-level function: create_model(...)
 2. Copy the required argument list exactly: same names, order, spelling, and case; no positional-only args, *args, or **kwargs
-3. create_model must return pyo.ConcreteModel
-4. Arguments represent input sets/parameters only; use every argument and do not add, remove, rename, or reorder inputs
-5. Use contract inputs and explicit requirements, not commentary or aliases
-6. Preserve tuple-key order exactly as provided upstream; do not transpose tuple-keyed data
-7. Decision variables must be defined as pyo.Var components
-8. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList; use only pyo.minimize or pyo.maximize
-9. No file I/O, solver calls, network/subprocess calls, randomness, or time-dependent behavior
-10. Use deterministic Pyomo construction only; do not derive sets from model component values
-11. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
-12. No markdown fences or explanations
+3. Arguments represent input sets/parameters only; use every argument and do not add, remove, rename, or reorder inputs
+4. Use contract inputs and explicit requirements, not commentary or aliases
+5. Preserve tuple-key order exactly as provided upstream; do not transpose tuple-keyed data
+6. Decision variables must be defined as pyo.Var components
+7. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList; use only pyo.minimize or pyo.maximize
+8. No file I/O, solver calls, network/subprocess calls, randomness, or time-dependent behavior
+9. Use deterministic Pyomo construction only; do not derive sets from model component values
+10. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
+11. No markdown fences or explanations
 
 The output is executed directly as a Python module and must be syntactically valid."""
     },
@@ -190,7 +208,6 @@ Modeling priorities:
 Pyomo requirements:
 - Return exactly one top-level function named create_model.
 - Keep the exact argument list and use every argument in model construction.
-- Return a pyo.ConcreteModel instance.
 - Use indexed Sets, Params, and Vars; use pyo.minimize or pyo.maximize.
 - Use binary variables for selection, assignment, activation, or yes/no decisions.
 - Use integer variables for counts or indivisible quantities.

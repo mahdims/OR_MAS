@@ -2,7 +2,7 @@
 import structlog
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS, compact_feedback_context, runtime_data_note
+from ..prompts import PROMPTS, compact_feedback_context, llm_problem_text, runtime_data_note
 
 logger = structlog.get_logger(__name__)
 
@@ -25,7 +25,7 @@ async def a5_datagen(state: ModelPack) -> ModelPack:
             if feedback_note:
                 feedback_context = f"Targeted feedback:\n{feedback_note}\n"
 
-        nl_problem = str(state.context.get("nl_problem") or "")
+        nl_problem = llm_problem_text(state.context.get("nl_problem") or "")
         nl_components_json = (
             state.components_nl.model_dump_json(indent=2)
             if state.components_nl is not None
@@ -41,7 +41,7 @@ async def a5_datagen(state: ModelPack) -> ModelPack:
             "upstream_artifacts": [
                 {
                     "label": "problem_input",
-                    "source": "state.context.nl_problem",
+                    "source": "llm_problem_text(state.context.nl_problem)",
                     "value": nl_problem,
                 },
                 {
@@ -79,7 +79,6 @@ Math:
 {feedback_context}
 
 Task:
-Return `DataGen(seed: int) -> dict`.
 Generate feasible data."""
 
         code = llm_client.code_generation_call(
