@@ -1,4 +1,4 @@
-# modelpack/agents/agent1_extractor.py
+# modelpack/agents/specify_problem.py
 import structlog
 from pydantic import BaseModel
 
@@ -9,14 +9,14 @@ from ..prompts import PROMPTS, llm_problem_text, problem_input_note
 logger = structlog.get_logger(__name__)
 
 
-async def a0_a1_specify_extract(state: ModelPack) -> ModelPack:
-    """Combined A0+A1 frontend pass used by the benchmarked full graph."""
+async def specify_problem(state: ModelPack) -> ModelPack:
+    """Specify the problem contract and extract NL components."""
 
-    logger.info("a0_a1_specify_extract_start", model_id=state.id)
+    logger.info("specify_problem_start", model_id=state.id)
 
     nl_problem = state.context.get("nl_problem", "")
     if not nl_problem:
-        logger.error("a0_a1_no_problem")
+        logger.error("specify_problem_missing_input")
         return state
 
     try:
@@ -77,7 +77,7 @@ Produce both:
         state.components_nl = result.components
 
         logger.info(
-            "a0_a1_specify_extract_success",
+            "specify_problem_success",
             objective_sense=result.contract.objective_sense,
             sets=len(result.components.sets),
             params=len(result.components.parameters),
@@ -85,6 +85,6 @@ Produce both:
         )
 
     except Exception as e:
-        logger.error("a0_a1_specify_extract_error", error=str(e))
+        logger.error("specify_problem_error", error=str(e))
 
     return state

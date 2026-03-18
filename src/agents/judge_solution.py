@@ -1,4 +1,4 @@
-# modelpack/agents/agent9_judge.py
+# modelpack/agents/judge_solution.py
 import structlog
 
 from ..schemas import Feedback, ModelPack
@@ -24,15 +24,15 @@ def _feedback_retry_key(target_agent: str) -> str:
     return "A9_to_A4" if target_agent == "A4" else "A9_to_A7"
 
 
-async def a9_judge(state: ModelPack) -> ModelPack:
-    """A9 - Deterministic judge for checker and model consistency."""
+async def judge_solution(state: ModelPack) -> ModelPack:
+    """Judge checker and model consistency deterministically."""
 
-    logger.info("a9_judge_start", model_id=state.id)
+    logger.info("judge_solution_start", model_id=state.id)
 
     MAX_RETRIES = 2
 
     if not state.code.solution_checker:
-        logger.info("a9_no_checker_skip")
+        logger.info("judge_solution_no_checker_skip")
         state.status = "completed"
         return state
 
@@ -42,7 +42,7 @@ async def a9_judge(state: ModelPack) -> ModelPack:
         checker_metadata = normalize_checker_metadata(namespace.get("CHECKER_METADATA"))
 
         if not SolutionChecker:
-            logger.warning("a9_checker_not_found")
+            logger.warning("judge_solution_checker_not_found")
             state.status = "completed"
             return state
 
@@ -82,7 +82,7 @@ async def a9_judge(state: ModelPack) -> ModelPack:
         ]
 
         if not solved_instances:
-            logger.info("a9_no_solved_instances")
+            logger.info("judge_solution_no_solved_instances")
             state.status = "completed"
             return state
 
@@ -232,7 +232,7 @@ async def a9_judge(state: ModelPack) -> ModelPack:
             retry_key = _feedback_retry_key("A7")
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
-                logger.warning("a9_max_retries", retries=retry_count, target_agent="A7")
+                logger.warning("judge_solution_max_retries", retries=retry_count, target_agent="A7")
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
@@ -263,7 +263,7 @@ async def a9_judge(state: ModelPack) -> ModelPack:
             retry_key = _feedback_retry_key("A7")
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
-                logger.warning("a9_max_retries", retries=retry_count, target_agent="A7")
+                logger.warning("judge_solution_max_retries", retries=retry_count, target_agent="A7")
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
@@ -293,7 +293,7 @@ async def a9_judge(state: ModelPack) -> ModelPack:
             retry_key = _feedback_retry_key("A4")
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
-                logger.warning("a9_max_retries", retries=retry_count, target_agent="A4")
+                logger.warning("judge_solution_max_retries", retries=retry_count, target_agent="A4")
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
@@ -323,7 +323,7 @@ async def a9_judge(state: ModelPack) -> ModelPack:
             retry_key = _feedback_retry_key("A4")
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
-                logger.warning("a9_max_retries", retries=retry_count, target_agent="A4")
+                logger.warning("judge_solution_max_retries", retries=retry_count, target_agent="A4")
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
@@ -355,7 +355,7 @@ async def a9_judge(state: ModelPack) -> ModelPack:
         state.status = "completed"
 
     except Exception as exc:
-        logger.error("a9_judge_error", error=str(exc))
+        logger.error("judge_solution_error", error=str(exc))
         state.status = "completed"
 
     return state

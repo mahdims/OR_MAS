@@ -1,4 +1,4 @@
-# modelpack/agents/agent3_mathifier.py
+# modelpack/agents/derive_math.py
 import structlog
 
 from ..schemas import ComponentsMATH, ModelPack
@@ -8,13 +8,13 @@ from ..prompts import PROMPTS
 logger = structlog.get_logger(__name__)
 
 
-async def a3_mathifier(state: ModelPack) -> ModelPack:
-    """A3 - Mathifier: Convert NL components to mathematical notation."""
+async def derive_math(state: ModelPack) -> ModelPack:
+    """Convert NL components to mathematical notation."""
 
-    logger.info("a3_mathifier_start", model_id=state.id)
+    logger.info("derive_math_start", model_id=state.id)
 
     if not state.components_nl:
-        logger.error("a3_no_components")
+        logger.error("derive_math_missing_components")
         return state
 
     try:
@@ -59,12 +59,12 @@ Map every explicit NL requirement to a math constraint. Stay compact and non-spe
         state.components_math = math_components
 
         logger.info(
-            "a3_mathifier_success",
+            "derive_math_success",
             indices=len(math_components.indices),
             constraints=len(math_components.constraints),
         )
 
     except Exception as e:
-        logger.error("a3_mathifier_error", error=str(e))
+        logger.error("derive_math_error", error=str(e))
 
     return state

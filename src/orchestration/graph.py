@@ -6,14 +6,14 @@ from typing import TypedDict
 from langgraph.graph import END, StateGraph
 
 from ..agents import (
-    agent1_extractor,
-    agent3_mathifier,
-    agent4_pyomo,
-    agent5_datagen,
-    agent6_screen,
-    agent7_checker,
-    agent8_solver,
-    agent9_judge,
+    build_model,
+    check_solution,
+    derive_math,
+    generate_data,
+    judge_solution,
+    screen_data,
+    solve_model,
+    specify_problem,
 )
 from ..llm import llm_client
 from ..schemas import ModelPack
@@ -37,14 +37,32 @@ class AgentSpec:
 
 
 AGENT_SPECS = (
-    AgentSpec("specify", "specify_problem", agent1_extractor.a0_a1_specify_extract),
-    AgentSpec("math", "derive_math", agent3_mathifier.a3_mathifier),
-    AgentSpec("model", "build_model", agent4_pyomo.a4_pyomo, feedback_target="A4"),
-    AgentSpec("data", "generate_data", agent5_datagen.a5_datagen),
-    AgentSpec("screen", "screen_data", agent6_screen.a6_screen),
-    AgentSpec("solve", "solve_model", agent8_solver.a8_solver),
-    AgentSpec("check", "check_solution", agent7_checker.a7_checker, feedback_target="A7"),
-    AgentSpec("judge", "judge_solution", agent9_judge.a9_judge),
+    AgentSpec(
+        "specify",
+        "specify_problem",
+        specify_problem.specify_problem,
+    ),
+    AgentSpec("math", "derive_math", derive_math.derive_math),
+    AgentSpec(
+        "model",
+        "build_model",
+        build_model.build_model,
+        feedback_target="A4",
+    ),
+    AgentSpec("data", "generate_data", generate_data.generate_data),
+    AgentSpec("screen", "screen_data", screen_data.screen_data),
+    AgentSpec("solve", "solve_model", solve_model.solve_model),
+    AgentSpec(
+        "check",
+        "check_solution",
+        check_solution.check_solution,
+        feedback_target="A7",
+    ),
+    AgentSpec(
+        "judge",
+        "judge_solution",
+        judge_solution.judge_solution,
+    ),
 )
 
 AGENTS_BY_KEY = {spec.key: spec for spec in AGENT_SPECS}

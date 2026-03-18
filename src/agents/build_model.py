@@ -1,4 +1,4 @@
-# modelpack/agents/agent4_pyomo.py
+# modelpack/agents/build_model.py
 import ast
 import re
 from typing import List, Optional, Set, Tuple
@@ -8,17 +8,9 @@ import structlog
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
 from ..prompts import PROMPTS, compact_feedback_context, llm_problem_text, runtime_data_note
+from .utils import normalize_generation_mode
 
 logger = structlog.get_logger(__name__)
-
-
-def _normalize_generation_mode(mode: str) -> str:
-    normalized = str(mode or "").strip().lower()
-    if normalized in {"single_pass", "prompt_only"}:
-        return "single_pass"
-    if normalized in {"repair_once", "repair2"}:
-        return "repair_once"
-    return "repair_once"
 
 
 def _call_name(node: ast.AST) -> str:
@@ -214,19 +206,19 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     return len(deduped) == 0, deduped
 
 
-async def a4_pyomo(state: ModelPack) -> ModelPack:
-    """A4 - Pyomo Builder: Generate Pyomo model code."""
+async def build_model(state: ModelPack) -> ModelPack:
+    """Generate Pyomo model code."""
 
-    logger.info("a4_pyomo_start", model_id=state.id)
+    logger.info("build_model_start", model_id=state.id)
 
     target_interface = str(state.context.get("target_interface") or "").strip()
     benchmark_mode = target_interface == "create_model"
     if not state.components_math:
-        logger.error("a4_missing_prerequisites")
+        logger.error("build_model_missing_prerequisites")
         return state
 
     try:
-        generation_mode = _normalize_generation_mode(state.context.get("generation_mode") or "")
+        generation_mode = normalize_generation_mode(state.context.get("generation_mode") or "")
 
         # Check for feedback
         feedback_note = ""
@@ -442,13 +434,13 @@ Math:
         )
 
         logger.info(
-            "a4_pyomo_success",
+            "build_model_success",
             code_length=len(code),
             target_interface=target_interface or "default",
             generation_mode=generation_mode if benchmark_mode else "default",
         )
 
     except Exception as e:
-        logger.error("a4_pyomo_error", error=str(e))
+        logger.error("build_model_error", error=str(e))
 
     return state

@@ -1,4 +1,4 @@
-# modelpack/agents/agent7_checker.py
+# modelpack/agents/check_solution.py
 import json
 
 import structlog
@@ -13,13 +13,13 @@ from .utils import (
 logger = structlog.get_logger(__name__)
 
 
-async def a7_checker(state: ModelPack) -> ModelPack:
-    """A7 - Solution Checker Author: Generate constraint verification code."""
+async def check_solution(state: ModelPack) -> ModelPack:
+    """Generate solution-checking code."""
 
-    logger.info("a7_checker_start", model_id=state.id)
+    logger.info("check_solution_start", model_id=state.id)
 
     if not state.components_nl:
-        logger.error("a7_missing_prerequisites")
+        logger.error("check_solution_missing_prerequisites")
         return state
 
     try:
@@ -196,9 +196,9 @@ async def a7_checker(state: ModelPack) -> ModelPack:
             language="python", filename="solution_checker.py", source=code
         )
 
-        logger.info("a7_checker_success", code_length=len(code))
+        logger.info("check_solution_success", code_length=len(code))
 
     except Exception as e:
-        logger.error("a7_checker_error", error=str(e))
+        logger.error("check_solution_error", error=str(e))
 
     return state

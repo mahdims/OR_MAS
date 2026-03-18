@@ -1,4 +1,4 @@
-# modelpack/agents/agent5_datagen.py
+# modelpack/agents/generate_data.py
 import structlog
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
@@ -7,13 +7,13 @@ from ..prompts import PROMPTS, compact_feedback_context, llm_problem_text, runti
 logger = structlog.get_logger(__name__)
 
 
-async def a5_datagen(state: ModelPack) -> ModelPack:
-    """A5 - DataGen Author: Generate data generation code."""
+async def generate_data(state: ModelPack) -> ModelPack:
+    """Generate data generation code."""
 
-    logger.info("a5_datagen_start", model_id=state.id)
+    logger.info("generate_data_start", model_id=state.id)
 
     if not state.components_math:
-        logger.error("a5_missing_prerequisites")
+        logger.error("generate_data_missing_prerequisites")
         return state
 
     try:
@@ -91,9 +91,9 @@ Generate feasible data."""
 
         state.code.datagen = CodeBlob(language="python", filename="datagen.py", source=code)
 
-        logger.info("a5_datagen_success", code_length=len(code))
+        logger.info("generate_data_success", code_length=len(code))
 
     except Exception as e:
-        logger.error("a5_datagen_error", error=str(e))
+        logger.error("generate_data_error", error=str(e))
 
     return state

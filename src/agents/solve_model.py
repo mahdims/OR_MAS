@@ -1,4 +1,4 @@
-# modelpack/agents/agent8_solver.py
+# modelpack/agents/solve_model.py
 import structlog
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
@@ -14,13 +14,13 @@ from .utils import (
 logger = structlog.get_logger(__name__)
 
 
-async def a8_solver(state: ModelPack) -> ModelPack:
-    """A8 - Solver: Run optimization and extract solutions."""
+async def solve_model(state: ModelPack) -> ModelPack:
+    """Solve the generated model and extract solutions."""
 
-    logger.info("a8_solver_start", model_id=state.id)
+    logger.info("solve_model_start", model_id=state.id)
 
     if not all([state.code.model_builder, state.code.datagen]):
-        logger.error("a8_missing_code")
+        logger.error("solve_model_missing_code")
         return state
 
     try:
@@ -45,7 +45,7 @@ async def a8_solver(state: ModelPack) -> ModelPack:
         solver_name, solver = resolve_solver()
         if not solver:
             return state
-        logger.info("a8_solver_selected", solver=solver_name)
+        logger.info("solve_model_solver_selected", solver=solver_name)
 
         checker_contract_written = False
 
@@ -122,10 +122,15 @@ async def a8_solver(state: ModelPack) -> ModelPack:
                         )
                         checker_contract_written = True
 
-                logger.info("a8_instance_solved", seed=seed, feasible=feasible, obj_value=obj_value)
+                logger.info(
+                    "solve_model_instance_solved",
+                    seed=seed,
+                    feasible=feasible,
+                    obj_value=obj_value,
+                )
 
             except Exception as e:
-                logger.warning("a8_solve_failed", seed=seed, error=str(e))
+                logger.warning("solve_model_failed", seed=seed, error=str(e))
 
         if not checker_contract_written:
             state.tests["checker_contract"] = build_checker_contract(
@@ -134,6 +139,6 @@ async def a8_solver(state: ModelPack) -> ModelPack:
             )
 
     except Exception as e:
-        logger.error("a8_solver_error", error=str(e))
+        logger.error("solve_model_error", error=str(e))
 
     return state

@@ -1,4 +1,4 @@
-# modelpack/agents/agent6_screen.py
+# modelpack/agents/screen_data.py
 import structlog
 import traceback
 import pyomo.environ as pyo
@@ -9,10 +9,10 @@ from .utils import load_modules_with_shared_namespace, resolve_solver
 logger = structlog.get_logger(__name__)
 
 
-async def a6_screen(state: ModelPack) -> ModelPack:
-    """A6 - Feasibility Screener with comprehensive error handling."""
+async def screen_data(state: ModelPack) -> ModelPack:
+    """Screen generated data and model feasibility."""
 
-    logger.info("a6_screen_start", model_id=state.id)
+    logger.info("screen_data_start", model_id=state.id)
 
     # Check retry limit
     MAX_RETRIES = 2
@@ -26,7 +26,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
     ]
 
     if not all([state.code.model_builder, state.code.datagen]):
-        logger.error("a6_missing_code")
+        logger.error("screen_data_missing_code")
         return state
 
     try:
@@ -57,7 +57,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                 else:
                     raise TypeError("DataGen output must be dict-like for create_model mode")
                 test_model = create_model_fn(**test_kwargs)
-            logger.info("a6_model_builds_successfully")
+            logger.info("screen_data_model_build_success")
 
         except Exception as pyomo_error:
             error_str = str(pyomo_error)
@@ -65,7 +65,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
 
             # Check retry limit
             if retry_count >= MAX_RETRIES:
-                logger.error("a6_max_retries", retries=retry_count)
+                logger.error("screen_data_max_retries", retries=retry_count)
                 state.tests["last_feedback"] = None
                 return state
 
@@ -107,7 +107,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
             state.tests["retry_counts"][retry_key] = retry_count + 1
 
             logger.warning(
-                "a6_model_build_failed",
+                "screen_data_model_build_failed",
                 error_type=type(pyomo_error).__name__,
                 retry=retry_count + 1,
             )
@@ -117,7 +117,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
         solver_name, solver = resolve_solver()
         if not solver:
             return state
-        logger.info("a6_solver_selected", solver=solver_name)
+        logger.info("screen_data_solver_selected", solver=solver_name)
 
         infeasible_count = 0
 
@@ -167,7 +167,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
                     infeasible_count += 1
 
             except Exception as e:
-                logger.warning("a6_instance_test_failed", seed=seed, error=str(e))
+                logger.warning("screen_data_instance_test_failed", seed=seed, error=str(e))
                 infeasible_count += 1
 
         # Reset retry count on success
@@ -176,7 +176,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
         # Check for data issues
         if infeasible_count > 2:
             if retry_count >= MAX_RETRIES:
-                logger.warning("a6_max_retries", retries=retry_count)
+                logger.warning("screen_data_max_retries", retries=retry_count)
                 state.tests["last_feedback"] = None
             else:
                 repair_iterations = state.tests.setdefault("repair_iterations", {})
@@ -198,6 +198,6 @@ async def a6_screen(state: ModelPack) -> ModelPack:
             state.tests["last_feedback"] = None
 
     except Exception as e:
-        logger.error("a6_screen_error", error=str(e))
+        logger.error("screen_data_error", error=str(e))
 
     return state

@@ -1,20 +1,20 @@
 # modelpack/agents/__init__.py
-from . import agent1_extractor
-from . import agent3_mathifier
-from . import agent4_pyomo
-from . import agent5_datagen
-from . import agent6_screen
-from . import agent7_checker
-from . import agent8_solver
-from . import agent9_judge
+from . import build_model
+from . import check_solution
+from . import derive_math
+from . import generate_data
+from . import judge_solution
+from . import screen_data
+from . import solve_model
+from . import specify_problem
 
 __all__ = [
-    "agent1_extractor",
-    "agent3_mathifier",
-    "agent4_pyomo",
-    "agent5_datagen",
-    "agent6_screen",
-    "agent7_checker",
-    "agent8_solver",
-    "agent9_judge",
+    "build_model",
+    "check_solution",
+    "derive_math",
+    "generate_data",
+    "judge_solution",
+    "screen_data",
+    "solve_model",
+    "specify_problem",
 ]
