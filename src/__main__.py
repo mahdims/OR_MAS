@@ -15,6 +15,15 @@ logger = structlog.get_logger(__name__)
 DEFAULT_GRAPH_VARIANT = "main"
 
 
+def _normalize_generation_mode(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    if normalized in {"single_pass", "prompt_only"}:
+        return "single_pass"
+    if normalized in {"repair_once", "repair2"}:
+        return "repair_once"
+    return "repair_once"
+
+
 def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -> None:
     detailed_calls = [
         dict(call) for call in trace_payload.get("calls", []) if isinstance(call, dict)
@@ -25,7 +34,7 @@ def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -
 async def run_pipeline(
     problem_text: str,
     target_interface: str = "",
-    generation_mode: str = "repair2",
+    generation_mode: str = "repair_once",
     graph_variant: str = DEFAULT_GRAPH_VARIANT,
 ) -> ModelPack:
     """Run the full modeling pipeline on a natural language problem."""
@@ -37,7 +46,7 @@ async def run_pipeline(
     target_interface = (target_interface or "").strip()
     if target_interface:
         model_pack.context["target_interface"] = target_interface
-        model_pack.context["generation_mode"] = (generation_mode or "repair2").strip() or "repair2"
+        model_pack.context["generation_mode"] = _normalize_generation_mode(generation_mode)
 
     # Create and run app
     from .orchestration.graph import create_app
@@ -61,7 +70,7 @@ async def run_pipeline(
 
 async def run_generation_pipeline(
     problem_text: str,
-    generation_mode: str = "repair2",
+    generation_mode: str = "repair_once",
 ) -> ModelPack:
     """Run the minimal MAS path and stop after A4 Pyomo generation."""
     logger.info("starting_generation_pipeline", problem_length=len(problem_text))
@@ -69,7 +78,7 @@ async def run_generation_pipeline(
     model_pack = ModelPack()
     model_pack.context["nl_problem"] = problem_text
     model_pack.context["target_interface"] = "create_model"
-    model_pack.context["generation_mode"] = (generation_mode or "repair2").strip() or "repair2"
+    model_pack.context["generation_mode"] = _normalize_generation_mode(generation_mode)
 
     from .orchestration.graph import create_generation_app
 
@@ -91,7 +100,7 @@ async def run_generation_pipeline(
 
 async def run_single_agent_generation(
     problem_text: str,
-    generation_mode: str = "repair2",
+    generation_mode: str = "repair_once",
 ) -> ModelPack:
     """Run a direct single-agent create_model baseline on the provided input."""
     logger.info("starting_single_agent_generation", problem_length=len(problem_text))
@@ -100,9 +109,7 @@ async def run_single_agent_generation(
     model_pack.context["nl_problem"] = problem_text
     model_pack.context["target_interface"] = "create_model"
 
-    normalized_mode = (generation_mode or "repair2").strip().lower()
-    if normalized_mode not in {"prompt_only", "repair2"}:
-        normalized_mode = "repair2"
+    normalized_mode = _normalize_generation_mode(generation_mode)
     model_pack.context["generation_mode"] = normalized_mode
 
     system_prompt = PROMPTS["single_agent_create_model"]["system"]
@@ -128,7 +135,7 @@ async def run_single_agent_generation(
             trace_input=trace_input,
         )
         valid, diagnostics = _validate_create_model_entrypoint(code)
-        if not valid and normalized_mode == "repair2":
+        if not valid and normalized_mode == "repair_once":
             repair_iterations = model_pack.tests.setdefault("repair_iterations", {})
             repair_iterations["single_agent_validation"] = (
                 int(repair_iterations.get("single_agent_validation") or 0) + 1

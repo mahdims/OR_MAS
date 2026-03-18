@@ -12,6 +12,15 @@ from ..prompts import PROMPTS, compact_feedback_context, llm_problem_text, runti
 logger = structlog.get_logger(__name__)
 
 
+def _normalize_generation_mode(mode: str) -> str:
+    normalized = str(mode or "").strip().lower()
+    if normalized in {"single_pass", "prompt_only"}:
+        return "single_pass"
+    if normalized in {"repair_once", "repair2"}:
+        return "repair_once"
+    return "repair_once"
+
+
 def _call_name(node: ast.AST) -> str:
     if isinstance(node, ast.Name):
         return node.id
@@ -217,9 +226,7 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
         return state
 
     try:
-        generation_mode = str(state.context.get("generation_mode") or "repair2").strip().lower()
-        if generation_mode not in {"prompt_only", "repair2"}:
-            generation_mode = "repair2"
+        generation_mode = _normalize_generation_mode(state.context.get("generation_mode") or "")
 
         # Check for feedback
         feedback_note = ""
@@ -353,7 +360,7 @@ Math:
                 trace_input=trace_input,
             )
             valid, diagnostics = _validate_create_model_entrypoint(code)
-            if not valid and generation_mode == "repair2":
+            if not valid and generation_mode == "repair_once":
                 repair_iterations = state.tests.setdefault("repair_iterations", {})
                 repair_iterations["A4_validation"] = (
                     int(repair_iterations.get("A4_validation") or 0) + 1
