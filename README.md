@@ -50,20 +50,20 @@ python -m src
 
 ```
 Full graph:
-A0+A1 Frontend  → Contract + NL components
-A3 Mathifier    → Convert to LaTeX
-A4 Pyomo        → Generate model code
-A5 DataGen      → Generate test data
-A6 Screen       → Feasibility testing
-A7 Checker      → Solution validator
-A8 Solver       → Execute optimization
-A9 Judge        → Cross-validate results
+specify_problem  → Contract + NL components
+derive_math      → Convert to LaTeX
+build_model      → Generate model code
+generate_data    → Generate test data
+screen_data      → Feasibility testing
+check_solution   → Solution validator
+solve_model      → Execute optimization
+judge_solution   → Cross-validate results
 
 Single-agent baseline:
 Problem input   → create_model directly
 ```
 
-The full graph keeps the A6/A9 feedback loops that are exercised by the benchmark.
+The full graph keeps the `screen_data` and `judge_solution` feedback loops that are exercised by the benchmark.
 
 ## License
 

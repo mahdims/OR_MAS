@@ -20,7 +20,7 @@ async def generate_data(state: ModelPack) -> ModelPack:
         # Check for feedback
         feedback_context = ""
         feedback = state.tests.get("last_feedback")
-        if feedback and feedback.target_agent == "A5":
+        if feedback and feedback.target_agent == "generate_data":
             feedback_note = compact_feedback_context(feedback)
             if feedback_note:
                 feedback_context = f"Targeted feedback:\n{feedback_note}\n"
@@ -82,7 +82,7 @@ Task:
 Generate feasible data."""
 
         code = llm_client.code_generation_call(
-            sys_prompt=PROMPTS["A5_datagen"]["system"],
+            sys_prompt=PROMPTS["generate_data"]["system"],
             user_prompt=user_prompt,
             temperature=0.3,
             validate=True,

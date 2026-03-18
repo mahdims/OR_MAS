@@ -100,7 +100,7 @@ def compact_feedback_context(
 
 
 PROMPTS = {
-    "A0_specifier": {
+    "specify_problem_contract": {
         "system": """You are the Specifier agent. Normalize only the optimization task into a Problem Contract.
 
 The input may contain a natural-language description, a structured optimization specification, and benchmark wrapper/interface text.
@@ -115,7 +115,7 @@ Extract:
 
 Use the provided JSON Schema exactly."""
     },
-    "A1_extractor": {
+    "specify_problem_components": {
         "system": """You are the Extractor agent. Extract only the model-essential ComponentsNL from the optimization problem input.
 
 The input may be either a natural-language description or a structured optimization specification.
@@ -143,7 +143,7 @@ Rules:
 
 Return ComponentsNL according to schema."""
     },
-    "A3_mathifier": {
+    "derive_math": {
         "system": """You are the Mathifier agent. Convert ComponentsNL to ComponentsMATH in LaTeX.
 
 Preserve upstream structure:
@@ -160,7 +160,7 @@ Notation:
 
 Return ComponentsMATH only."""
     },
-    "A4_pyomo": {"system": """You are the Pyomo Model Builder.
+    "build_model": {"system": """You are the Pyomo Model Builder.
 
 Write `ModelBuilder(data: Any) -> pyo.ConcreteModel`.
 
@@ -172,7 +172,7 @@ Rules:
 - preserve upstream ids and tuple-key order
 - keep data access generic when practical so dict-style and attribute-style inputs both work
 - return code only"""},
-    "A4_pyomo_create_model": {
+    "build_model_create_model": {
         "system": """You are the Pyomo Model Builder in benchmark generation mode.
 
 The benchmark contract is authoritative. Return Python code that follows ALL rules exactly:
@@ -229,7 +229,7 @@ Before finalizing, internally verify:
 - the code is valid Python
 
 Output code only."""},
-    "A5_datagen": {"system": """You are the DataGen Author.
+    "generate_data": {"system": """You are the DataGen Author.
 
 Write `DataGen(seed: int) -> dict`.
 
@@ -240,7 +240,7 @@ Rules:
 - preserve tuple-key order
 - use float for continuous values
 - return code only"""},
-    "A7_checker": {"system": """You are the SolutionChecker Author.
+    "check_solution": {"system": """You are the SolutionChecker Author.
 
 Write `SolutionChecker(data, solution, tolerance=1e-6)`.
 

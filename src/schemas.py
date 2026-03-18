@@ -136,7 +136,7 @@ class ModelPack(BaseModel):
     status: str = "initialized"
 
 
-# ---- Context for A0 ----
+# ---- Context for specify_problem ----
 class ContextContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
     assumptions: List[str] = Field(default_factory=list)

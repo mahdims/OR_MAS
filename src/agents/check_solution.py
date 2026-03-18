@@ -43,7 +43,7 @@ async def check_solution(state: ModelPack) -> ModelPack:
 
         feedback_note = ""
         feedback = state.tests.get("last_feedback")
-        if feedback and feedback.target_agent == "A7":
+        if feedback and feedback.target_agent == "check_solution":
             feedback_note = compact_feedback_context(feedback)
         trace_input = {
             "agent": "check_solution",
@@ -148,7 +148,7 @@ async def check_solution(state: ModelPack) -> ModelPack:
                 if grounded_feedback:
                     user_prompt_sections.extend(
                         [
-                            "Grounded repair evidence from A9:",
+                            "Grounded repair evidence from judge_solution:",
                             json.dumps(grounded_feedback, indent=2),
                         ]
                     )
@@ -156,7 +156,7 @@ async def check_solution(state: ModelPack) -> ModelPack:
                 if model_code_snippet:
                     user_prompt_sections.extend(
                         [
-                            "Relevant model code snippet from A9:",
+                            "Relevant model code snippet from judge_solution:",
                             f"```python\n{model_code_snippet}\n```",
                         ]
                     )
@@ -185,7 +185,7 @@ async def check_solution(state: ModelPack) -> ModelPack:
         user_prompt = "\n\n".join(user_prompt_sections)
 
         code = llm_client.code_generation_call(
-            sys_prompt=PROMPTS["A7_checker"]["system"],
+            sys_prompt=PROMPTS["check_solution"]["system"],
             user_prompt=user_prompt,
             temperature=0.3,
             validate=True,

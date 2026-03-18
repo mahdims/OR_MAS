@@ -41,8 +41,8 @@ Produce both:
             components: ComponentsNL
 
         sys_prompt = (
-            f"{PROMPTS['A0_specifier']['system']}\n\n"
-            f"{PROMPTS['A1_extractor']['system']}\n\n"
+            f"{PROMPTS['specify_problem_contract']['system']}\n\n"
+            f"{PROMPTS['specify_problem_components']['system']}\n\n"
             "Return a JSON object with fields 'contract' and 'components'."
         )
         trace_input = {

@@ -16,9 +16,9 @@ async def screen_data(state: ModelPack) -> ModelPack:
 
     # Check retry limit
     MAX_RETRIES = 2
-    retry_key = "A6_to_A4"
+    retry_key = "screen_data_to_build_model"
     retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
-    state.tests["last_feedback"] = None
+    existing_feedback = state.tests.get("last_feedback")
     state.tests["instances"] = [
         instance
         for instance in state.tests.get("instances", [])
@@ -26,10 +26,20 @@ async def screen_data(state: ModelPack) -> ModelPack:
     ]
 
     if not all([state.code.model_builder, state.code.datagen]):
+        if getattr(existing_feedback, "target_agent", None) == "build_model":
+            logger.warning(
+                "screen_data_missing_code_with_feedback",
+                issue=getattr(existing_feedback, "issue", None),
+                source_agent=getattr(existing_feedback, "source_agent", None),
+            )
+            state.tests["last_feedback"] = existing_feedback
+            return state
+        state.tests["last_feedback"] = None
         logger.error("screen_data_missing_code")
         return state
 
     try:
+        state.tests["last_feedback"] = None
         # Load all modules in shared namespace
         namespace = load_modules_with_shared_namespace(state.code)
 
@@ -86,10 +96,10 @@ async def screen_data(state: ModelPack) -> ModelPack:
                 feedback_issue = "pyomo_build_error"
                 fix = f"ModelBuilder failed: {error_str}\nCheck Pyomo syntax and data access patterns."
 
-            # Create feedback for A4
+            # Create feedback for build_model
             feedback = Feedback(
-                source_agent="A6",
-                target_agent="A4",
+                source_agent="screen_data",
+                target_agent="build_model",
                 issue=feedback_issue,
                 evidence={
                     "error_type": type(pyomo_error).__name__,
@@ -102,7 +112,9 @@ async def screen_data(state: ModelPack) -> ModelPack:
             )
 
             repair_iterations = state.tests.setdefault("repair_iterations", {})
-            repair_iterations["A6_to_A4"] = int(repair_iterations.get("A6_to_A4") or 0) + 1
+            repair_iterations["screen_data_to_build_model"] = (
+                int(repair_iterations.get("screen_data_to_build_model") or 0) + 1
+            )
             state.tests["last_feedback"] = feedback
             state.tests["retry_counts"][retry_key] = retry_count + 1
 
@@ -180,10 +192,12 @@ async def screen_data(state: ModelPack) -> ModelPack:
                 state.tests["last_feedback"] = None
             else:
                 repair_iterations = state.tests.setdefault("repair_iterations", {})
-                repair_iterations["A6_to_A4"] = int(repair_iterations.get("A6_to_A4") or 0) + 1
+                repair_iterations["screen_data_to_build_model"] = (
+                    int(repair_iterations.get("screen_data_to_build_model") or 0) + 1
+                )
                 feedback = Feedback(
-                    source_agent="A6",
-                    target_agent="A4",
+                    source_agent="screen_data",
+                    target_agent="build_model",
                     issue="data_infeasible",
                     evidence={"infeasible_count": infeasible_count, "total_tested": 4},
                     proposed_fix=(

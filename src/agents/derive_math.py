@@ -45,7 +45,7 @@ Map every explicit NL requirement to a math constraint. Stay compact and non-spe
         }
 
         math_components = llm_client.structured_call(
-            sys_prompt=PROMPTS["A3_mathifier"]["system"],
+            sys_prompt=PROMPTS["derive_math"]["system"],
             user_prompt=user_prompt,
             pyd_model=ComponentsMATH,
             temperature=0.5,

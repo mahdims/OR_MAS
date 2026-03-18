@@ -21,7 +21,11 @@ logger = structlog.get_logger(__name__)
 
 
 def _feedback_retry_key(target_agent: str) -> str:
-    return "A9_to_A4" if target_agent == "A4" else "A9_to_A7"
+    return (
+        "judge_solution_to_build_model"
+        if target_agent == "build_model"
+        else "judge_solution_to_check_solution"
+    )
 
 
 async def judge_solution(state: ModelPack) -> ModelPack:
@@ -229,20 +233,26 @@ async def judge_solution(state: ModelPack) -> ModelPack:
             schema_mismatch_reason = "checker_metadata_missing"
 
         if schema_mismatch_reason:
-            retry_key = _feedback_retry_key("A7")
+            retry_key = _feedback_retry_key("check_solution")
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
-                logger.warning("judge_solution_max_retries", retries=retry_count, target_agent="A7")
+                logger.warning(
+                    "judge_solution_max_retries",
+                    retries=retry_count,
+                    target_agent="check_solution",
+                )
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
                 return state
 
             repair_iterations = state.tests.setdefault("repair_iterations", {})
-            repair_iterations["A9_to_A7"] = int(repair_iterations.get("A9_to_A7") or 0) + 1
+            repair_iterations["judge_solution_to_check_solution"] = (
+                int(repair_iterations.get("judge_solution_to_check_solution") or 0) + 1
+            )
             feedback = Feedback(
-                source_agent="A9",
-                target_agent="A7",
+                source_agent="judge_solution",
+                target_agent="check_solution",
                 issue="checker_schema_mismatch",
                 evidence={
                     **validation_report,
@@ -260,20 +270,26 @@ async def judge_solution(state: ModelPack) -> ModelPack:
             return state
 
         if checker_false_positive_examples:
-            retry_key = _feedback_retry_key("A7")
+            retry_key = _feedback_retry_key("check_solution")
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
-                logger.warning("judge_solution_max_retries", retries=retry_count, target_agent="A7")
+                logger.warning(
+                    "judge_solution_max_retries",
+                    retries=retry_count,
+                    target_agent="check_solution",
+                )
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
                 return state
 
             repair_iterations = state.tests.setdefault("repair_iterations", {})
-            repair_iterations["A9_to_A7"] = int(repair_iterations.get("A9_to_A7") or 0) + 1
+            repair_iterations["judge_solution_to_check_solution"] = (
+                int(repair_iterations.get("judge_solution_to_check_solution") or 0) + 1
+            )
             feedback = Feedback(
-                source_agent="A9",
-                target_agent="A7",
+                source_agent="judge_solution",
+                target_agent="check_solution",
                 issue="checker_false_positive",
                 evidence={
                     **validation_report,
@@ -290,20 +306,26 @@ async def judge_solution(state: ModelPack) -> ModelPack:
             return state
 
         if deterministic_positive_failures:
-            retry_key = _feedback_retry_key("A4")
+            retry_key = _feedback_retry_key("build_model")
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
-                logger.warning("judge_solution_max_retries", retries=retry_count, target_agent="A4")
+                logger.warning(
+                    "judge_solution_max_retries",
+                    retries=retry_count,
+                    target_agent="build_model",
+                )
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
                 return state
 
             repair_iterations = state.tests.setdefault("repair_iterations", {})
-            repair_iterations["A9_to_A4"] = int(repair_iterations.get("A9_to_A4") or 0) + 1
+            repair_iterations["judge_solution_to_build_model"] = (
+                int(repair_iterations.get("judge_solution_to_build_model") or 0) + 1
+            )
             feedback = Feedback(
-                source_agent="A9",
-                target_agent="A4",
+                source_agent="judge_solution",
+                target_agent="build_model",
                 issue="model_constraint_mismatch",
                 evidence={
                     **validation_report,
@@ -320,20 +342,26 @@ async def judge_solution(state: ModelPack) -> ModelPack:
             return state
 
         if positive_mismatches:
-            retry_key = _feedback_retry_key("A4")
+            retry_key = _feedback_retry_key("build_model")
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
-                logger.warning("judge_solution_max_retries", retries=retry_count, target_agent="A4")
+                logger.warning(
+                    "judge_solution_max_retries",
+                    retries=retry_count,
+                    target_agent="build_model",
+                )
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
                 return state
 
             repair_iterations = state.tests.setdefault("repair_iterations", {})
-            repair_iterations["A9_to_A4"] = int(repair_iterations.get("A9_to_A4") or 0) + 1
+            repair_iterations["judge_solution_to_build_model"] = (
+                int(repair_iterations.get("judge_solution_to_build_model") or 0) + 1
+            )
             feedback = Feedback(
-                source_agent="A9",
-                target_agent="A4",
+                source_agent="judge_solution",
+                target_agent="build_model",
                 issue="model_constraint_mismatch",
                 evidence={
                     **validation_report,
@@ -350,8 +378,8 @@ async def judge_solution(state: ModelPack) -> ModelPack:
             return state
 
         state.tests["last_feedback"] = None
-        state.tests["retry_counts"][_feedback_retry_key("A7")] = 0
-        state.tests["retry_counts"][_feedback_retry_key("A4")] = 0
+        state.tests["retry_counts"][_feedback_retry_key("check_solution")] = 0
+        state.tests["retry_counts"][_feedback_retry_key("build_model")] = 0
         state.status = "completed"
 
     except Exception as exc:

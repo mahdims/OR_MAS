@@ -21,8 +21,6 @@ from ..schemas import ModelPack
 MAIN_FULL_GRAPH_VARIANT = "main"
 SUPPORTED_GRAPH_VARIANTS = {
     MAIN_FULL_GRAPH_VARIANT,
-    "no_a2_merge_a0_a1",
-    "no_a2_merge_a0_a1_no_a3b",
 }
 
 END_NODE = "END"
@@ -47,7 +45,7 @@ AGENT_SPECS = (
         "model",
         "build_model",
         build_model.build_model,
-        feedback_target="A4",
+        feedback_target="build_model",
     ),
     AgentSpec("data", "generate_data", generate_data.generate_data),
     AgentSpec("screen", "screen_data", screen_data.screen_data),
@@ -56,7 +54,7 @@ AGENT_SPECS = (
         "check",
         "check_solution",
         check_solution.check_solution,
-        feedback_target="A7",
+        feedback_target="check_solution",
     ),
     AgentSpec(
         "judge",
