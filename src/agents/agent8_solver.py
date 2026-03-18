@@ -4,6 +4,7 @@ import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
 from ..schemas import ModelPack, TestInstance
 from .utils import (
+    build_checker_contract,
     load_modules_with_shared_namespace,
     resolve_solver,
     store_solution_entry,
@@ -23,6 +24,12 @@ async def a8_solver(state: ModelPack) -> ModelPack:
         return state
 
     try:
+        state.tests["instances"] = [
+            instance
+            for instance in state.tests.get("instances", [])
+            if not str(getattr(instance, "id", "")).startswith("solve_")
+        ]
+
         # Load modules
         namespace = load_modules_with_shared_namespace(state.code)
 
@@ -39,6 +46,8 @@ async def a8_solver(state: ModelPack) -> ModelPack:
         if not solver:
             return state
         logger.info("a8_solver_selected", solver=solver_name)
+
+        checker_contract_written = False
 
         # Solve multiple instances
         for seed in range(3):
@@ -104,11 +113,25 @@ async def a8_solver(state: ModelPack) -> ModelPack:
                     observed_solution_schema = summarize_solution_dict(solution_dict)
                     observed_solution_schema["instance_id"] = instance.id
                     state.tests["observed_solution_schema"] = observed_solution_schema
+                    if not checker_contract_written:
+                        state.tests["checker_contract"] = build_checker_contract(
+                            components_nl=state.components_nl,
+                            model_source=state.code.model_builder.source,
+                            data_dict=data_dict,
+                            solution_dict=solution_dict,
+                        )
+                        checker_contract_written = True
 
                 logger.info("a8_instance_solved", seed=seed, feasible=feasible, obj_value=obj_value)
 
             except Exception as e:
                 logger.warning("a8_solve_failed", seed=seed, error=str(e))
+
+        if not checker_contract_written:
+            state.tests["checker_contract"] = build_checker_contract(
+                components_nl=state.components_nl,
+                model_source=state.code.model_builder.source,
+            )
 
     except Exception as e:
         logger.error("a8_solver_error", error=str(e))

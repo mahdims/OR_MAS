@@ -245,9 +245,12 @@ Rules:
 Write `SolutionChecker(data, solution, tolerance=1e-6)`.
 
 Rules:
-- check only listed basic constraints
+- define top-level `CHECKER_METADATA` before the function
+- use the checker contract as the source of truth for exact data and solution names
+- check every listed constraint you can ground, including logical and auxiliary constraints when possible
 - support dict or attribute access
 - use only exact solution variable names provided in grounding artifacts
+- use only exact data names provided in grounding artifacts
 - do not invent aliases or renamed fields
 - prefer raw tuple/native keys and then the provided string fallback keys
 - return `{\"feasible\": bool, \"violations\": str}`

@@ -89,12 +89,14 @@ class Feedback(BaseModel):
     source_agent: str
     target_agent: str
     issue: Literal[
+        "checker_false_positive",
         "checker_schema_mismatch",
         "data_infeasible",
         "checker_false_negative",
         "code_build_error",
         "domain_mismatch",
         "math_inconsistency",
+        "model_constraint_mismatch",
         "pyomo_build_error",
         "type_mismatch",
     ]

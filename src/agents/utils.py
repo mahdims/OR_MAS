@@ -1,10 +1,12 @@
 # modelpack/agents/utils.py
 import ast
+import copy
 import tempfile
 import importlib.util
 import sys
 import os
 import re
+import math
 from typing import Any, Dict, List, Mapping
 import pyomo.environ as pyo
 import structlog
@@ -253,6 +255,69 @@ def summarize_solution_dict(
     return summary
 
 
+def summarize_data_dict(
+    data_dict: Mapping[str, Any],
+    *,
+    max_index_samples: int = 3,
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "data_keys": [],
+        "key_types": {},
+        "indexed_key_samples": {},
+    }
+    if not isinstance(data_dict, Mapping):
+        return summary
+
+    for key, value in data_dict.items():
+        key_name = str(key)
+        summary["data_keys"].append(key_name)
+        summary["key_types"][key_name] = type(value).__name__
+        if isinstance(value, Mapping):
+            samples = [repr(item) for item in list(value.keys())[:max_index_samples]]
+            summary["indexed_key_samples"][key_name] = samples
+
+    return summary
+
+
+def build_constraint_catalog(components_nl: Any) -> List[Dict[str, Any]]:
+    if components_nl is None:
+        return []
+
+    catalog: List[Dict[str, Any]] = []
+    for bucket_name, constraint_type in (
+        ("constraints_basic", "basic"),
+        ("constraints_logical", "logical"),
+        ("constraints_aux", "aux"),
+    ):
+        for item in getattr(components_nl, bucket_name, []) or []:
+            catalog.append(
+                {
+                    "id": getattr(item, "id", None),
+                    "name": getattr(item, "name", None),
+                    "desc": getattr(item, "desc", None),
+                    "type": constraint_type,
+                }
+            )
+    return catalog
+
+
+def build_checker_contract(
+    *,
+    components_nl: Any,
+    model_source: str,
+    data_dict: Mapping[str, Any] | None = None,
+    solution_dict: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    model_grounding = extract_model_component_grounding(model_source)
+    return {
+        "constraint_catalog": build_constraint_catalog(components_nl),
+        "model_grounding": model_grounding,
+        "canonical_solution_schema": build_canonical_solution_schema(model_grounding),
+        "observed_solution_schema": summarize_solution_dict(solution_dict or {}),
+        "observed_data_schema": summarize_data_dict(data_dict or {}),
+    }
+
+
 def extract_checker_solution_refs(checker_source: str) -> List[str]:
     if not (checker_source or "").strip():
         return []
@@ -268,6 +333,41 @@ def extract_checker_solution_refs(checker_source: str) -> List[str]:
             if match not in seen:
                 seen.append(match)
     return seen
+
+
+def extract_checker_data_refs(checker_source: str) -> List[str]:
+    if not (checker_source or "").strip():
+        return []
+
+    patterns = [
+        r"(?:get|getattr|get_param)\(\s*data\s*,\s*['\"]([^'\"]+)['\"]",
+        r"data\.get\(\s*['\"]([^'\"]+)['\"]",
+        r"data\[['\"]([^'\"]+)['\"]\]",
+    ]
+    seen: List[str] = []
+    for pattern in patterns:
+        for match in re.findall(pattern, checker_source):
+            if match not in seen:
+                seen.append(match)
+    return seen
+
+
+def normalize_checker_metadata(metadata: Any) -> Dict[str, Any]:
+    if not isinstance(metadata, Mapping):
+        return {
+            "grounded_constraints": [],
+            "skipped_constraints": [],
+            "solution_names_used": [],
+            "data_names_used": [],
+        }
+
+    normalized = {
+        "grounded_constraints": list(metadata.get("grounded_constraints") or []),
+        "skipped_constraints": list(metadata.get("skipped_constraints") or []),
+        "solution_names_used": list(metadata.get("solution_names_used") or []),
+        "data_names_used": list(metadata.get("data_names_used") or []),
+    }
+    return normalized
 
 
 def _tokenize_schema_text(text: Any) -> List[str]:
@@ -320,3 +420,232 @@ def violation_matches_model_grounding(
             if len(overlap) >= min(3, len(name_tokens)):
                 return True
     return False
+
+
+def match_violation_to_constraints(
+    violation: str,
+    constraint_catalog: List[Mapping[str, Any]],
+) -> List[str]:
+    violation_tokens = set(_tokenize_schema_text(violation))
+    matches: List[str] = []
+    if not violation_tokens:
+        return matches
+
+    for item in constraint_catalog:
+        name = str(item.get("name") or "").strip()
+        desc = str(item.get("desc") or "").strip()
+        tokens = set(_tokenize_schema_text(name)) | set(_tokenize_schema_text(desc))
+        if not tokens:
+            continue
+        overlap = violation_tokens & tokens
+        if len(overlap) >= min(3, max(1, len(tokens) // 3)):
+            matches.append(name or str(item.get("id") or "constraint"))
+    return matches
+
+
+def lookup_solution_value(container: Any, key: Any) -> tuple[bool, Any]:
+    if isinstance(container, Mapping):
+        if key in container:
+            return True, container[key]
+        text_key = str(key)
+        if text_key in container:
+            return True, container[text_key]
+    else:
+        try:
+            return True, container[key]
+        except Exception:
+            pass
+    return False, None
+
+
+def build_model_from_instance(namespace: Mapping[str, Any], data_dict: Mapping[str, Any]) -> Any:
+    ModelBuilder = namespace.get("ModelBuilder")
+    create_model_fn = namespace.get("create_model")
+
+    if ModelBuilder:
+        try:
+            return ModelBuilder(data_dict)
+        except Exception:
+            data_obj = type("RuntimeData", (), dict(data_dict))()
+            return ModelBuilder(data_obj)
+    if create_model_fn:
+        return create_model_fn(**dict(data_dict))
+    raise ValueError("ModelBuilder or create_model not found")
+
+
+def assign_solution_to_model(
+    model: Any,
+    solution_dict: Mapping[str, Any],
+) -> List[str]:
+    issues: List[str] = []
+    for var in model.component_objects(pyo.Var, active=True):
+        var_name = var.name
+        if var_name not in solution_dict:
+            issues.append(f"missing_solution_variable:{var_name}")
+            continue
+
+        container = solution_dict[var_name]
+        if var.is_indexed():
+            for index in var:
+                found, value = lookup_solution_value(container, index)
+                if not found:
+                    issues.append(f"missing_solution_index:{var_name}[{index!r}]")
+                    continue
+                var[index].set_value(value, skip_validation=True)
+        else:
+            var.set_value(container, skip_validation=True)
+    return issues
+
+
+def _domain_name(var_data: Any) -> str:
+    domain = getattr(var_data, "domain", None)
+    name = getattr(domain, "name", None)
+    return str(name or domain or "")
+
+
+def evaluate_model_deterministically(
+    model: Any,
+    *,
+    tolerance: float = 1e-6,
+    max_violations: int = 8,
+) -> Dict[str, Any]:
+    violations: List[str] = []
+    checked_constraints = 0
+
+    for var_data in model.component_data_objects(pyo.Var, active=True):
+        value = pyo.value(var_data, exception=False)
+        if value is None:
+            violations.append(f"uninitialized_variable:{var_data.name}")
+            if len(violations) >= max_violations:
+                break
+            continue
+        lb = pyo.value(var_data.lb, exception=False) if var_data.lb is not None else None
+        ub = pyo.value(var_data.ub, exception=False) if var_data.ub is not None else None
+        if lb is not None and value < lb - tolerance:
+            violations.append(f"lower_bound_violation:{var_data.name}")
+        if ub is not None and value > ub + tolerance:
+            violations.append(f"upper_bound_violation:{var_data.name}")
+
+        domain_name = _domain_name(var_data)
+        if "Binary" in domain_name and min(abs(value), abs(value - 1)) > tolerance:
+            violations.append(f"binary_domain_violation:{var_data.name}")
+        elif "Integer" in domain_name and abs(value - round(value)) > tolerance:
+            violations.append(f"integer_domain_violation:{var_data.name}")
+
+        if len(violations) >= max_violations:
+            break
+
+    if len(violations) < max_violations:
+        for constraint in model.component_data_objects(pyo.Constraint, active=True):
+            checked_constraints += 1
+            body_value = pyo.value(constraint.body, exception=False)
+            lower_value = pyo.value(constraint.lower, exception=False) if constraint.has_lb() else None
+            upper_value = pyo.value(constraint.upper, exception=False) if constraint.has_ub() else None
+
+            if body_value is None:
+                violations.append(f"unevaluable_constraint:{constraint.name}")
+            elif lower_value is not None and body_value < lower_value - tolerance:
+                violations.append(f"constraint_lb_violation:{constraint.name}")
+            elif upper_value is not None and body_value > upper_value + tolerance:
+                violations.append(f"constraint_ub_violation:{constraint.name}")
+
+            if len(violations) >= max_violations:
+                break
+
+    return {
+        "feasible": len(violations) == 0,
+        "violations": violations,
+        "checked_constraints": checked_constraints,
+    }
+
+
+def _iter_solution_locations(solution_dict: Mapping[str, Any]) -> List[tuple[str, Any, Any]]:
+    locations: List[tuple[str, Any, Any]] = []
+    for var_name, container in solution_dict.items():
+        if isinstance(container, Mapping):
+            native_keys = [key for key in container.keys() if not isinstance(key, str)]
+            keys = native_keys or list(container.keys())
+            seen = set()
+            for key in keys:
+                key_marker = repr(key)
+                if key_marker in seen:
+                    continue
+                seen.add(key_marker)
+                locations.append((str(var_name), key, container[key]))
+        else:
+            locations.append((str(var_name), None, container))
+    return locations
+
+
+def _mutation_values(current_value: Any, domain: str) -> List[Any]:
+    try:
+        numeric = float(current_value)
+    except (TypeError, ValueError):
+        return []
+
+    if "Binary" in str(domain):
+        return [0.0 if numeric >= 0.5 else 1.0]
+    if "Integer" in str(domain):
+        candidates = [math.floor(numeric) + 1, math.ceil(numeric) - 1, 0]
+    else:
+        candidates = [numeric + 1.0, numeric - 1.0, 0.0]
+
+    mutations: List[Any] = []
+    for candidate in candidates:
+        if abs(float(candidate) - numeric) > 1e-9 and candidate not in mutations:
+            mutations.append(candidate)
+    return mutations
+
+
+def find_infeasible_solution_mutations(
+    namespace: Mapping[str, Any],
+    data_dict: Mapping[str, Any],
+    solution_dict: Mapping[str, Any],
+    canonical_solution_schema: Mapping[str, Any],
+    *,
+    tolerance: float = 1e-6,
+    max_examples: int = 2,
+    max_locations: int = 12,
+) -> List[Dict[str, Any]]:
+    examples: List[Dict[str, Any]] = []
+    locations = _iter_solution_locations(solution_dict)[:max_locations]
+
+    for var_name, key, current_value in locations:
+        schema_entry = canonical_solution_schema.get(var_name, {})
+        domain = str(schema_entry.get("domain") or "")
+        for candidate_value in _mutation_values(current_value, domain):
+            mutated = copy.deepcopy(solution_dict)
+            if key is None:
+                mutated[var_name] = candidate_value
+            else:
+                mutated[var_name][key] = candidate_value
+                text_key = str(key)
+                if isinstance(mutated[var_name], Mapping) and text_key in mutated[var_name]:
+                    mutated[var_name][text_key] = candidate_value
+
+            try:
+                model = build_model_from_instance(namespace, data_dict)
+                assign_solution_to_model(model, mutated)
+                deterministic = evaluate_model_deterministically(model, tolerance=tolerance)
+            except Exception:
+                continue
+
+            if deterministic["feasible"]:
+                continue
+
+            examples.append(
+                {
+                    "solution": mutated,
+                    "mutation": {
+                        "variable": var_name,
+                        "key": repr(key) if key is not None else None,
+                        "old_value": current_value,
+                        "new_value": candidate_value,
+                    },
+                    "deterministic_violations": deterministic["violations"],
+                }
+            )
+            if len(examples) >= max_examples:
+                return examples
+
+    return examples

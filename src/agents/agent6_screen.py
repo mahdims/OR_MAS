@@ -19,6 +19,11 @@ async def a6_screen(state: ModelPack) -> ModelPack:
     retry_key = "A6_to_A4"
     retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
     state.tests["last_feedback"] = None
+    state.tests["instances"] = [
+        instance
+        for instance in state.tests.get("instances", [])
+        if not str(getattr(instance, "id", "")).startswith("screen_")
+    ]
 
     if not all([state.code.model_builder, state.code.datagen]):
         logger.error("a6_missing_code")

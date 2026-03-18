@@ -130,17 +130,47 @@ def route_after_a6(state: GraphState) -> str:
         state["model_pack"],
         type="route",
         from_agent="A6_screen",
-        to_agent="A7_checker",
+        to_agent="A8_solver",
         reason=_feedback_summary(feedback) or {"reason": "screen_passed"},
     )
-    return "A7_checker"
+    return "A8_solver"
+
+
+def route_after_a8(state: GraphState) -> str:
+    """Route after solving once so the checker can use real solution artifacts."""
+    solved_instances = [
+        instance
+        for instance in state["model_pack"].tests.get("instances", [])
+        if str(getattr(instance, "id", "")).startswith("solve_")
+        and getattr(instance, "feasible", False)
+        and getattr(instance, "solution_dict", None)
+    ]
+
+    if solved_instances:
+        _append_trajectory_event(
+            state["model_pack"],
+            type="route",
+            from_agent="A8_solver",
+            to_agent="A7_checker",
+            reason={"reason": "solved_instances_available", "count": len(solved_instances)},
+        )
+        return "A7_checker"
+
+    _append_trajectory_event(
+        state["model_pack"],
+        type="route",
+        from_agent="A8_solver",
+        to_agent="END",
+        reason={"reason": "no_solved_instances"},
+    )
+    return "END"
 
 
 def route_after_a9(state: GraphState) -> str:
     """Route after cross-validation."""
     feedback = state["model_pack"].tests.get("last_feedback")
 
-    if feedback and feedback.issue == "checker_false_negative":
+    if feedback and getattr(feedback, "target_agent", None) == "A7":
         _append_trajectory_event(
             state["model_pack"],
             type="route",
@@ -149,6 +179,16 @@ def route_after_a9(state: GraphState) -> str:
             reason=_feedback_summary(feedback),
         )
         return "A7_checker"
+
+    if feedback and getattr(feedback, "target_agent", None) == "A4":
+        _append_trajectory_event(
+            state["model_pack"],
+            type="route",
+            from_agent="A9_judge",
+            to_agent="A4_pyomo",
+            reason=_feedback_summary(feedback),
+        )
+        return "A4_pyomo"
 
     _append_trajectory_event(
         state["model_pack"],
@@ -188,21 +228,29 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
     graph.add_edge("A3_mathifier", "A4_pyomo")
     graph.add_edge("A4_pyomo", "A5_datagen")
     graph.add_edge("A5_datagen", "A6_screen")
-    graph.add_edge("A7_checker", "A8_solver")
-    graph.add_edge("A8_solver", "A9_judge")
+    graph.add_edge("A7_checker", "A9_judge")
 
     graph.add_conditional_edges(
         "A6_screen",
         route_after_a6,
         {
             "A4_pyomo": "A4_pyomo",
+            "A8_solver": "A8_solver",
+        },
+    )
+    graph.add_conditional_edges(
+        "A8_solver",
+        route_after_a8,
+        {
             "A7_checker": "A7_checker",
+            "END": END,
         },
     )
     graph.add_conditional_edges(
         "A9_judge",
         route_after_a9,
         {
+            "A4_pyomo": "A4_pyomo",
             "A7_checker": "A7_checker",
             "END": END,
         },

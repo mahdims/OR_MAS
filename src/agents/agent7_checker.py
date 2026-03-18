@@ -6,9 +6,8 @@ from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
 from ..prompts import PROMPTS, compact_feedback_context, runtime_data_note
 from .utils import (
-    build_canonical_solution_schema,
-    extract_model_component_grounding,
-    summarize_solution_dict,
+    build_checker_contract,
+    build_constraint_catalog,
 )
 
 logger = structlog.get_logger(__name__)
@@ -24,33 +23,23 @@ async def a7_checker(state: ModelPack) -> ModelPack:
         return state
 
     try:
-        # Get basic constraints
-        basic_constraints = state.components_nl.constraints_basic
-        basic_constraints_json = json.dumps(
-            [{"name": c.name, "desc": c.desc} for c in basic_constraints],
+        constraint_catalog = build_constraint_catalog(state.components_nl)
+        constraint_catalog_json = json.dumps(
+            constraint_catalog,
             indent=2,
         )
         model_builder_source = (
             state.code.model_builder.source
             if state.code.model_builder and state.code.model_builder.source
-            else None
+            else ""
         )
-        model_grounding = (
-            extract_model_component_grounding(model_builder_source) if model_builder_source else {}
-        )
-        canonical_solution_schema = build_canonical_solution_schema(model_grounding)
-        if model_grounding:
-            state.tests["checker_grounding"] = model_grounding
-        if canonical_solution_schema:
-            state.tests["canonical_solution_schema"] = canonical_solution_schema
-
-        observed_solution_schema = None
-        for instance in state.tests.get("instances", []):
-            if getattr(instance, "feasible", False) and getattr(instance, "solution_dict", None):
-                observed_solution_schema = summarize_solution_dict(instance.solution_dict)
-                observed_solution_schema["instance_id"] = instance.id
-                state.tests["observed_solution_schema"] = observed_solution_schema
-                break
+        checker_contract = state.tests.get("checker_contract")
+        if not isinstance(checker_contract, dict):
+            checker_contract = build_checker_contract(
+                components_nl=state.components_nl,
+                model_source=model_builder_source,
+            )
+            state.tests["checker_contract"] = checker_contract
 
         feedback_note = ""
         feedback = state.tests.get("last_feedback")
@@ -60,36 +49,17 @@ async def a7_checker(state: ModelPack) -> ModelPack:
             "agent": "A7_checker",
             "upstream_artifacts": [
                 {
-                    "label": "basic_constraints",
-                    "source": "state.components_nl.constraints_basic",
-                    "value": basic_constraints_json,
+                    "label": "constraint_catalog",
+                    "source": "build_constraint_catalog(state.components_nl)",
+                    "value": constraint_catalog,
                 },
+                {
+                    "label": "checker_contract",
+                    "source": "state.tests.checker_contract",
+                    "value": checker_contract,
+                }
             ],
         }
-        if canonical_solution_schema:
-            trace_input["upstream_artifacts"].append(
-                {
-                    "label": "canonical_solution_schema",
-                    "source": "build_canonical_solution_schema(model_builder_source)",
-                    "value": canonical_solution_schema,
-                }
-            )
-        if model_grounding:
-            trace_input["upstream_artifacts"].append(
-                {
-                    "label": "model_grounding",
-                    "source": "extract_model_component_grounding(model_builder_source)",
-                    "value": model_grounding,
-                }
-            )
-        if observed_solution_schema:
-            trace_input["upstream_artifacts"].append(
-                {
-                    "label": "observed_solution_schema",
-                    "source": "state.tests.instances[*].solution_dict",
-                    "value": observed_solution_schema,
-                }
-            )
         if feedback_note:
             trace_input["upstream_artifacts"].append(
                 {
@@ -145,31 +115,17 @@ async def a7_checker(state: ModelPack) -> ModelPack:
             )
 
         user_prompt_sections = [
-            "Basic constraints:",
-            basic_constraints_json,
-            "Exact canonical solution schema from the generated model:",
-            json.dumps(canonical_solution_schema, indent=2),
+            "Constraint catalog:",
+            constraint_catalog_json,
+            "Checker contract:",
+            json.dumps(checker_contract, indent=2),
             runtime_data_note(),
         ]
-        if model_grounding:
-            user_prompt_sections.extend(
-                [
-                    "Exact model grounding artifact from the generated model code:",
-                    json.dumps(model_grounding, indent=2),
-                ]
-            )
         if model_builder_source:
             user_prompt_sections.extend(
                 [
                     "Generated model code to ground exact names against:",
                     f"```python\n{model_builder_source}\n```",
-                ]
-            )
-        if observed_solution_schema:
-            user_prompt_sections.extend(
-                [
-                    "Observed solution_dict schema from solved instances:",
-                    json.dumps(observed_solution_schema, indent=2),
                 ]
             )
         if feedback_note:
@@ -215,12 +171,14 @@ async def a7_checker(state: ModelPack) -> ModelPack:
             [
                 "Task:",
                 (
-                    "Return `SolutionChecker(data, solution, tolerance=1e-6)`.\n"
-                    "Check only the listed constraints.\n"
-                    "Use only exact solution variable names shown in the canonical schema or observed solution_dict schema.\n"
-                    "Do not invent aliases, renamed variables, or paraphrased field names.\n"
-                    "When reading indexed decision values, try the raw tuple/native index first and then the shown string fallback.\n"
-                    "If a listed constraint cannot be grounded confidently to the provided exact names, skip it instead of guessing."
+                    "Return Python code only.\n"
+                    "Define a top-level `CHECKER_METADATA` dict with keys "
+                    "`grounded_constraints`, `skipped_constraints`, `solution_names_used`, and `data_names_used`.\n"
+                    "Then define `SolutionChecker(data, solution, tolerance=1e-6)`.\n"
+                    "Use only exact data and solution names from the checker contract.\n"
+                    "Check every listed constraint you can ground from the contract, including logical and auxiliary ones when possible.\n"
+                    "If a constraint cannot be grounded confidently, do not guess; add it to `skipped_constraints` with a reason.\n"
+                    "Use a helper that reads indexed solution values by trying the native tuple/index key first and then `str(index)`."
                 ),
             ]
         )

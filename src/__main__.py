@@ -9,10 +9,10 @@ from .agents.agent4_pyomo import _validate_create_model_entrypoint
 from .llm import llm_client
 from .prompts import PROMPTS, llm_problem_text
 from .schemas import CodeBlob, ModelPack
-from .orchestration.graph import MAIN_FULL_GRAPH_VARIANT, create_app, create_generation_app
 
 load_dotenv()
 logger = structlog.get_logger(__name__)
+DEFAULT_GRAPH_VARIANT = "main"
 
 
 def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -> None:
@@ -26,7 +26,7 @@ async def run_pipeline(
     problem_text: str,
     target_interface: str = "",
     generation_mode: str = "repair2",
-    graph_variant: str = MAIN_FULL_GRAPH_VARIANT,
+    graph_variant: str = DEFAULT_GRAPH_VARIANT,
 ) -> ModelPack:
     """Run the full modeling pipeline on a natural language problem."""
     logger.info("starting_pipeline", problem_length=len(problem_text))
@@ -40,6 +40,8 @@ async def run_pipeline(
         model_pack.context["generation_mode"] = (generation_mode or "repair2").strip() or "repair2"
 
     # Create and run app
+    from .orchestration.graph import create_app
+
     app = create_app(graph_variant=graph_variant)
     initial_state = {"model_pack": model_pack}
 
@@ -68,6 +70,8 @@ async def run_generation_pipeline(
     model_pack.context["nl_problem"] = problem_text
     model_pack.context["target_interface"] = "create_model"
     model_pack.context["generation_mode"] = (generation_mode or "repair2").strip() or "repair2"
+
+    from .orchestration.graph import create_generation_app
 
     app = create_generation_app()
     initial_state = {"model_pack": model_pack}

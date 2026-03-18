@@ -1,26 +1,35 @@
 # modelpack/agents/agent9_judge.py
 import structlog
-from ..schemas import ModelPack, Feedback
+
+from ..schemas import Feedback, ModelPack
 from .utils import (
-    build_canonical_solution_schema,
+    assign_solution_to_model,
+    build_checker_contract,
+    build_model_from_instance,
+    evaluate_model_deterministically,
+    extract_checker_data_refs,
     extract_checker_solution_refs,
-    extract_model_component_grounding,
+    find_infeasible_solution_mutations,
     load_modules_with_shared_namespace,
+    match_violation_to_constraints,
+    normalize_checker_metadata,
+    summarize_data_dict,
     summarize_solution_dict,
-    violation_matches_model_grounding,
 )
 
 logger = structlog.get_logger(__name__)
 
 
+def _feedback_retry_key(target_agent: str) -> str:
+    return "A9_to_A4" if target_agent == "A4" else "A9_to_A7"
+
+
 async def a9_judge(state: ModelPack) -> ModelPack:
-    """A9 - Judge: Cross-validate solver solutions against checker."""
+    """A9 - Deterministic judge for checker and model consistency."""
 
     logger.info("a9_judge_start", model_id=state.id)
 
     MAX_RETRIES = 2
-    retry_key = "A9_to_A7"
-    retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
 
     if not state.code.solution_checker:
         logger.info("a9_no_checker_skip")
@@ -28,34 +37,48 @@ async def a9_judge(state: ModelPack) -> ModelPack:
         return state
 
     try:
-        # Load modules
         namespace = load_modules_with_shared_namespace(state.code)
-        model_source = (
-            state.code.model_builder.source
-            if state.code.model_builder and state.code.model_builder.source
-            else ""
-        )
-        model_grounding = extract_model_component_grounding(model_source)
-        canonical_solution_schema = build_canonical_solution_schema(model_grounding)
-        checker_source = (
-            state.code.solution_checker.source
-            if state.code.solution_checker and state.code.solution_checker.source
-            else ""
-        )
-        checker_solution_refs = extract_checker_solution_refs(checker_source)
-
         SolutionChecker = namespace.get("SolutionChecker")
+        checker_metadata = normalize_checker_metadata(namespace.get("CHECKER_METADATA"))
 
         if not SolutionChecker:
             logger.warning("a9_checker_not_found")
             state.status = "completed"
             return state
 
-        # Get solved instances
+        checker_contract = state.tests.get("checker_contract")
+        if not isinstance(checker_contract, dict):
+            checker_contract = build_checker_contract(
+                components_nl=state.components_nl,
+                model_source=(
+                    state.code.model_builder.source
+                    if state.code.model_builder and state.code.model_builder.source
+                    else ""
+                ),
+            )
+            state.tests["checker_contract"] = checker_contract
+
+        constraint_catalog = list(checker_contract.get("constraint_catalog") or [])
+        canonical_solution_schema = dict(checker_contract.get("canonical_solution_schema") or {})
+
+        checker_source = (
+            state.code.solution_checker.source
+            if state.code.solution_checker and state.code.solution_checker.source
+            else ""
+        )
+        checker_solution_refs = (
+            checker_metadata.get("solution_names_used") or extract_checker_solution_refs(checker_source)
+        )
+        checker_data_refs = (
+            checker_metadata.get("data_names_used") or extract_checker_data_refs(checker_source)
+        )
+
         solved_instances = [
-            i
-            for i in state.tests.get("instances", [])
-            if i.id.startswith("solve_") and i.feasible and i.solution_dict
+            instance
+            for instance in state.tests.get("instances", [])
+            if str(getattr(instance, "id", "")).startswith("solve_")
+            and getattr(instance, "feasible", False)
+            and getattr(instance, "solution_dict", None)
         ]
 
         if not solved_instances:
@@ -63,132 +86,276 @@ async def a9_judge(state: ModelPack) -> ModelPack:
             state.status = "completed"
             return state
 
-        # Cross-validate
-        mismatches = []
-        observed_solution_schema = None
-        solution_keys = set()
+        state.tests["last_feedback"] = None
+
+        positive_mismatches = []
+        checker_runtime_failures = []
+        deterministic_positive_failures = []
+        checker_false_positive_examples = []
         missing_solution_refs = set()
-        violation_counts = {}
-        for instance in solved_instances[:3]:  # Check first 3
+        missing_data_refs = set()
+        solution_keys = set()
+        data_keys = set()
+        indexed_key_samples = {}
+        data_key_samples = {}
+        reference_instance = None
+
+        for instance in solved_instances[:3]:
+            data_summary = summarize_data_dict(instance.data_dict)
+            solution_summary = summarize_solution_dict(instance.solution_dict)
+            data_keys.update(data_summary.get("data_keys") or [])
+            solution_keys.update(solution_summary.get("solution_keys") or [])
+            indexed_key_samples.update(solution_summary.get("indexed_key_samples") or {})
+            data_key_samples.update(data_summary.get("indexed_key_samples") or {})
+            missing_solution_refs.update(
+                ref for ref in checker_solution_refs if ref not in solution_summary.get("solution_keys", [])
+            )
+            missing_data_refs.update(
+                ref for ref in checker_data_refs if ref not in data_summary.get("data_keys", [])
+            )
+
             try:
-                # Reconstruct data object
-                data_dict = instance.data_dict
-                if instance.solution_dict:
-                    solution_summary = summarize_solution_dict(instance.solution_dict)
-                    if observed_solution_schema is None:
-                        observed_solution_schema = dict(solution_summary)
-                        observed_solution_schema["instance_id"] = instance.id
-                    instance_solution_keys = solution_summary.get("solution_keys") or []
-                    solution_keys.update(instance_solution_keys)
-                    missing_solution_refs.update(
-                        ref for ref in checker_solution_refs if ref not in instance_solution_keys
+                model = build_model_from_instance(namespace, instance.data_dict)
+                assignment_issues = assign_solution_to_model(model, instance.solution_dict)
+                deterministic_result = evaluate_model_deterministically(model)
+            except Exception as exc:
+                deterministic_positive_failures.append(
+                    {
+                        "instance_id": instance.id,
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            if assignment_issues or not deterministic_result.get("feasible", False):
+                deterministic_positive_failures.append(
+                    {
+                        "instance_id": instance.id,
+                        "assignment_issues": assignment_issues,
+                        "deterministic_violations": deterministic_result.get("violations", []),
+                    }
+                )
+                continue
+
+            if reference_instance is None:
+                reference_instance = instance
+
+            try:
+                checker_result = SolutionChecker(instance.data_dict, instance.solution_dict)
+            except Exception as exc:
+                checker_runtime_failures.append(
+                    {
+                        "instance_id": instance.id,
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            checker_feasible = bool(checker_result.get("feasible", False))
+            violations = str(checker_result.get("violations", "") or "").strip()
+            matched_constraints = match_violation_to_constraints(violations, constraint_catalog)
+
+            if not checker_feasible:
+                positive_mismatches.append(
+                    {
+                        "instance_id": instance.id,
+                        "checker_says": "infeasible",
+                        "violations": violations,
+                        "matched_constraints": matched_constraints,
+                    }
+                )
+
+        negative_examples = []
+        if reference_instance is not None:
+            negative_examples = find_infeasible_solution_mutations(
+                namespace,
+                reference_instance.data_dict,
+                reference_instance.solution_dict,
+                canonical_solution_schema,
+            )
+            for example in negative_examples:
+                try:
+                    checker_result = SolutionChecker(
+                        reference_instance.data_dict,
+                        example["solution"],
                     )
-
-                # Run checker
-                result = SolutionChecker(data_dict, instance.solution_dict)
-
-                checker_feasible = result.get("feasible", False)
-                solver_feasible = instance.feasible
-
-                if solver_feasible and not checker_feasible:
-                    violations = str(result.get("violations", "") or "").strip()
-                    if violations:
-                        violation_counts[violations] = violation_counts.get(violations, 0) + 1
-                    # False negative - checker rejected valid solution
-                    mismatches.append(
+                except Exception as exc:
+                    checker_runtime_failures.append(
                         {
-                            "instance_id": instance.id,
-                            "solver_says": "feasible",
-                            "checker_says": "infeasible",
-                            "violations": violations,
+                            "instance_id": reference_instance.id,
+                            "phase": "negative_example",
+                            "error": str(exc),
+                            "mutation": example.get("mutation"),
                         }
                     )
-                    logger.warning("a9_mismatch_false_negative", instance=instance.id)
+                    continue
 
-            except Exception as e:
-                logger.warning("a9_check_failed", instance=instance.id, error=str(e))
+                if bool(checker_result.get("feasible", False)):
+                    checker_false_positive_examples.append(
+                        {
+                            "instance_id": reference_instance.id,
+                            "mutation": example.get("mutation"),
+                            "deterministic_violations": example.get("deterministic_violations", []),
+                        }
+                    )
 
-        # Create feedback if mismatches found
-        if mismatches:
-            repeated_violation = None
-            repeated_violation_count = 0
-            for violation_text, count in violation_counts.items():
-                if count > repeated_violation_count:
-                    repeated_violation = violation_text
-                    repeated_violation_count = count
+        validation_report = {
+            "positive_mismatches": positive_mismatches,
+            "checker_runtime_failures": checker_runtime_failures,
+            "deterministic_positive_failures": deterministic_positive_failures,
+            "checker_false_positive_examples": checker_false_positive_examples,
+            "negative_examples_tested": len(negative_examples),
+            "checker_metadata": checker_metadata,
+            "checker_solution_refs": checker_solution_refs,
+            "checker_data_refs": checker_data_refs,
+            "missing_solution_refs": sorted(missing_solution_refs),
+            "missing_data_refs": sorted(missing_data_refs),
+            "solution_keys": sorted(solution_keys),
+            "data_keys": sorted(data_keys),
+            "indexed_key_samples": indexed_key_samples,
+            "data_key_samples": data_key_samples,
+            "canonical_solution_schema": canonical_solution_schema,
+        }
+        state.tests["checker_validation"] = validation_report
 
-            shared_evidence = {
-                "mismatches": mismatches,
-                "total_checked": len(solved_instances),
-                "checker_solution_refs": checker_solution_refs,
-                "missing_solution_refs": sorted(missing_solution_refs),
-                "solution_keys": sorted(solution_keys),
-                "indexed_key_samples": (
-                    observed_solution_schema.get("indexed_key_samples", {})
-                    if isinstance(observed_solution_schema, dict)
-                    else {}
-                ),
-                "canonical_solution_schema": canonical_solution_schema,
-                "model_code_snippet": model_source[:4000] if model_source else "",
-            }
+        schema_mismatch_reason = None
+        if checker_runtime_failures:
+            schema_mismatch_reason = "checker_runtime_failure"
+        elif missing_solution_refs or missing_data_refs:
+            schema_mismatch_reason = "checker_refs_missing_from_contract"
+        elif not (
+            checker_metadata.get("grounded_constraints") or checker_metadata.get("skipped_constraints")
+        ):
+            schema_mismatch_reason = "checker_metadata_missing"
 
-            schema_mismatch_reason = None
-            if missing_solution_refs:
-                schema_mismatch_reason = "checker_refs_missing_from_solution_dict"
-            elif (
-                repeated_violation
-                and repeated_violation_count >= 2
-                and violation_matches_model_grounding(repeated_violation, model_grounding)
-            ):
-                schema_mismatch_reason = "repeated_violation_matches_existing_candidate_constraint"
-
-            if schema_mismatch_reason:
-                shared_evidence["schema_mismatch_reason"] = schema_mismatch_reason
-                if repeated_violation:
-                    shared_evidence["repeated_violation"] = repeated_violation
-                feedback = Feedback(
-                    source_agent="A9",
-                    target_agent="A7",
-                    issue="checker_schema_mismatch",
-                    evidence=shared_evidence,
-                    proposed_fix=(
-                        "Checker is not grounded to the candidate model schema. "
-                        "Use the exact solution variable names and observed key encoding; stop retrying "
-                        "the same checker loop."
-                    ),
-                    retry_count=retry_count,
-                )
-                state.tests["last_feedback"] = feedback
+        if schema_mismatch_reason:
+            retry_key = _feedback_retry_key("A7")
+            retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
+            if retry_count >= MAX_RETRIES:
+                logger.warning("a9_max_retries", retries=retry_count, target_agent="A7")
+                state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
                 state.status = "completed"
                 return state
-            if retry_count >= MAX_RETRIES:
-                logger.warning("a9_max_retries", retries=retry_count)
-                state.tests["last_feedback"] = None
-                state.status = "completed"
-                return state
+
             repair_iterations = state.tests.setdefault("repair_iterations", {})
             repair_iterations["A9_to_A7"] = int(repair_iterations.get("A9_to_A7") or 0) + 1
             feedback = Feedback(
                 source_agent="A9",
                 target_agent="A7",
-                issue="checker_false_negative",
-                evidence=shared_evidence,
+                issue="checker_schema_mismatch",
+                evidence={
+                    **validation_report,
+                    "schema_mismatch_reason": schema_mismatch_reason,
+                    "model_code_snippet": state.code.model_builder.source[:4000],
+                },
                 proposed_fix=(
-                    "Checker is too strict or has logic errors. "
-                    "Repair it against the grounded model schema, exact solution keys, and sampled index forms."
+                    "Checker must use the checker contract exactly and return CHECKER_METADATA. "
+                    "Repair the data/solution names and metadata before trying to audit the model."
                 ),
                 retry_count=retry_count,
             )
             state.tests["last_feedback"] = feedback
             state.tests["retry_counts"][retry_key] = retry_count + 1
-        else:
-            state.tests["last_feedback"] = None
-            state.tests["retry_counts"][retry_key] = 0
-            state.status = "completed"
+            return state
 
-    except Exception as e:
-        logger.error("a9_judge_error", error=str(e))
-        state.status = "completed"  # Don't block on judge errors
+        if checker_false_positive_examples:
+            retry_key = _feedback_retry_key("A7")
+            retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
+            if retry_count >= MAX_RETRIES:
+                logger.warning("a9_max_retries", retries=retry_count, target_agent="A7")
+                state.tests["last_feedback"] = None
+                state.tests["retry_counts"][retry_key] = 0
+                state.status = "completed"
+                return state
+
+            repair_iterations = state.tests.setdefault("repair_iterations", {})
+            repair_iterations["A9_to_A7"] = int(repair_iterations.get("A9_to_A7") or 0) + 1
+            feedback = Feedback(
+                source_agent="A9",
+                target_agent="A7",
+                issue="checker_false_positive",
+                evidence={
+                    **validation_report,
+                    "model_code_snippet": state.code.model_builder.source[:4000],
+                },
+                proposed_fix=(
+                    "Checker missed deterministically infeasible corrupted solutions. "
+                    "Repair the checker logic while staying grounded to the checker contract."
+                ),
+                retry_count=retry_count,
+            )
+            state.tests["last_feedback"] = feedback
+            state.tests["retry_counts"][retry_key] = retry_count + 1
+            return state
+
+        if deterministic_positive_failures:
+            retry_key = _feedback_retry_key("A4")
+            retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
+            if retry_count >= MAX_RETRIES:
+                logger.warning("a9_max_retries", retries=retry_count, target_agent="A4")
+                state.tests["last_feedback"] = None
+                state.tests["retry_counts"][retry_key] = 0
+                state.status = "completed"
+                return state
+
+            repair_iterations = state.tests.setdefault("repair_iterations", {})
+            repair_iterations["A9_to_A4"] = int(repair_iterations.get("A9_to_A4") or 0) + 1
+            feedback = Feedback(
+                source_agent="A9",
+                target_agent="A4",
+                issue="model_constraint_mismatch",
+                evidence={
+                    **validation_report,
+                    "model_code_snippet": state.code.model_builder.source[:4000],
+                },
+                proposed_fix=(
+                    "The extracted solver solution does not satisfy the generated Pyomo model under "
+                    "deterministic re-evaluation. Repair the model before relying on the checker."
+                ),
+                retry_count=retry_count,
+            )
+            state.tests["last_feedback"] = feedback
+            state.tests["retry_counts"][retry_key] = retry_count + 1
+            return state
+
+        if positive_mismatches:
+            retry_key = _feedback_retry_key("A4")
+            retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
+            if retry_count >= MAX_RETRIES:
+                logger.warning("a9_max_retries", retries=retry_count, target_agent="A4")
+                state.tests["last_feedback"] = None
+                state.tests["retry_counts"][retry_key] = 0
+                state.status = "completed"
+                return state
+
+            repair_iterations = state.tests.setdefault("repair_iterations", {})
+            repair_iterations["A9_to_A4"] = int(repair_iterations.get("A9_to_A4") or 0) + 1
+            feedback = Feedback(
+                source_agent="A9",
+                target_agent="A4",
+                issue="model_constraint_mismatch",
+                evidence={
+                    **validation_report,
+                    "model_code_snippet": state.code.model_builder.source[:4000],
+                },
+                proposed_fix=(
+                    "Checker is grounded and rejects a solver-feasible solution, so the generated model "
+                    "is likely missing or weakening an NL requirement. Repair the candidate model."
+                ),
+                retry_count=retry_count,
+            )
+            state.tests["last_feedback"] = feedback
+            state.tests["retry_counts"][retry_key] = retry_count + 1
+            return state
+
+        state.tests["last_feedback"] = None
+        state.tests["retry_counts"][_feedback_retry_key("A7")] = 0
+        state.tests["retry_counts"][_feedback_retry_key("A4")] = 0
+        state.status = "completed"
+
+    except Exception as exc:
+        logger.error("a9_judge_error", error=str(exc))
+        state.status = "completed"
 
     return state
