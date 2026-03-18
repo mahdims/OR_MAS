@@ -95,18 +95,8 @@ async def a9_judge(state: ModelPack) -> ModelPack:
             state.tests["retry_counts"][retry_key] = 0
             state.status = "completed"
 
-        state.tests["logs"].append(
-            {
-                "agent": "A9",
-                "status": "success",
-                "validated": len(solved_instances),
-                "mismatches": len(mismatches),
-            }
-        )
-
     except Exception as e:
         logger.error("a9_judge_error", error=str(e))
-        state.tests["logs"].append({"agent": "A9", "error": str(e)})
         state.status = "completed"  # Don't block on judge errors
 
     return state

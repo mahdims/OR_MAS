@@ -15,35 +15,11 @@ load_dotenv()
 logger = structlog.get_logger(__name__)
 
 
-def _compact_llm_call(call: dict[str, object]) -> dict[str, object]:
-    keys = [
-        "sequence",
-        "call_type",
-        "caller",
-        "provider",
-        "model_name",
-        "response_model",
-        "temperature",
-        "started_at",
-        "latency_seconds",
-        "success",
-        "error",
-        "finish_reason",
-        "input_tokens",
-        "output_tokens",
-        "total_tokens",
-        "usage",
-    ]
-    return {key: call.get(key) for key in keys}
-
-
 def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -> None:
     detailed_calls = [
         dict(call) for call in trace_payload.get("calls", []) if isinstance(call, dict)
     ]
     model_pack.tests["llm_trace"] = detailed_calls
-    model_pack.tests["llm_calls"] = [_compact_llm_call(call) for call in detailed_calls]
-    model_pack.tests["llm_usage_summary"] = trace_payload.get("summary", {})
 
 
 async def run_pipeline(

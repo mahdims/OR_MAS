@@ -32,7 +32,6 @@ async def a8_solver(state: ModelPack) -> ModelPack:
 
         solver_name, solver = resolve_solver()
         if not solver:
-            state.tests["logs"].append({"agent": "A8", "error": "No solver available"})
             return state
         logger.info("a8_solver_selected", solver=solver_name)
 
@@ -95,18 +94,7 @@ async def a8_solver(state: ModelPack) -> ModelPack:
             except Exception as e:
                 logger.warning("a8_solve_failed", seed=seed, error=str(e))
 
-        state.tests["logs"].append(
-            {
-                "agent": "A8",
-                "status": "success",
-                "instances_solved": len(
-                    [i for i in state.tests["instances"] if i.id.startswith("solve_")]
-                ),
-            }
-        )
-
     except Exception as e:
         logger.error("a8_solver_error", error=str(e))
-        state.tests["logs"].append({"agent": "A8", "error": str(e)})
 
     return state

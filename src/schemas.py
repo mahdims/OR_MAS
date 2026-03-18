@@ -123,10 +123,7 @@ class ModelPack(BaseModel):
     tests: Dict[str, Any] = Field(
         default_factory=lambda: {
             "instances": [],
-            "logs": [],
-            "llm_calls": [],
             "llm_trace": [],
-            "llm_usage_summary": {},
             "trajectory": [],
             "last_feedback": None,
             "retry_counts": {},  # Track retries per agent

@@ -111,7 +111,6 @@ async def a6_screen(state: ModelPack) -> ModelPack:
         # If model builds, test feasibility
         solver_name, solver = resolve_solver()
         if not solver:
-            state.tests["logs"].append({"agent": "A6", "error": "No solver available"})
             return state
         logger.info("a6_solver_selected", solver=solver_name)
 
@@ -193,12 +192,7 @@ async def a6_screen(state: ModelPack) -> ModelPack:
         else:
             state.tests["last_feedback"] = None
 
-        state.tests["logs"].append(
-            {"agent": "A6", "status": "success", "feasible_count": 4 - infeasible_count}
-        )
-
     except Exception as e:
         logger.error("a6_screen_error", error=str(e))
-        state.tests["logs"].append({"agent": "A6", "error": str(e)})
 
     return state

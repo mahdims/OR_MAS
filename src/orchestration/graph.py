@@ -73,7 +73,6 @@ async def _run_agent(
         type="agent",
         agent=label,
         llm_call_sequences=llm_sequences,
-        feedback=_feedback_summary(model_pack.tests.get("last_feedback")),
         status=model_pack.status,
     )
     state["model_pack"] = model_pack
