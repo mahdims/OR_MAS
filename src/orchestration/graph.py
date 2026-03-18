@@ -72,7 +72,6 @@ AGENTS_BY_FEEDBACK_TARGET = {
 }
 GENERATION_PATH = tuple(spec.node_name for spec in AGENT_SPECS[:3])
 FULL_GRAPH_NODES = tuple(spec.node_name for spec in AGENT_SPECS)
-PRE_SCREEN_PATH = tuple(spec.node_name for spec in AGENT_SPECS[:5])
 
 
 class GraphState(TypedDict):
@@ -208,6 +207,26 @@ def route_after_screen(state: GraphState) -> str:
     )
 
 
+def route_after_model(state: GraphState) -> str:
+    model_pack = state["model_pack"]
+    build_error = str(model_pack.tests.get("build_model_error") or "").strip()
+    model_builder = getattr(model_pack.code, "model_builder", None)
+    if model_builder is not None and not build_error:
+        return _route(
+            state,
+            from_node=_node("model"),
+            to_node=_node("data"),
+            reason={"reason": "build_model_succeeded"},
+        )
+
+    return _route(
+        state,
+        from_node=_node("model"),
+        to_node=END_NODE,
+        reason={"reason": "build_model_failed", "error": build_error or "model_builder_missing"},
+    )
+
+
 def route_after_solve(state: GraphState) -> str:
     solved_instances = [
         instance
@@ -262,9 +281,18 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
 
     graph = StateGraph(GraphState)
     _add_nodes(graph, FULL_GRAPH_NODES)
-    _add_linear_edges(graph, PRE_SCREEN_PATH)
+    _add_linear_edges(graph, GENERATION_PATH)
+    graph.add_edge(_node("data"), _node("screen"))
     graph.add_edge(_node("check"), _node("judge"))
 
+    graph.add_conditional_edges(
+        _node("model"),
+        route_after_model,
+        {
+            _node("data"): _node("data"),
+            END_NODE: END,
+        },
+    )
     graph.add_conditional_edges(
         _node("screen"),
         route_after_screen,

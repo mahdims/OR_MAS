@@ -219,11 +219,13 @@ async def build_model(state: ModelPack) -> ModelPack:
 
     try:
         generation_mode = normalize_generation_mode(state.context.get("generation_mode") or "")
+        state.tests["build_model_error"] = None
+        state.code.model_builder = None
 
         # Check for feedback
         feedback_note = ""
         feedback = state.tests.get("last_feedback")
-        if feedback and feedback.target_agent == "A4":
+        if feedback and feedback.target_agent == "build_model":
             feedback_note = compact_feedback_context(feedback)
         feedback_context = f"Targeted feedback:\n{feedback_note}\n" if feedback_note else ""
 
@@ -292,7 +294,7 @@ async def build_model(state: ModelPack) -> ModelPack:
                 ]
             )
             user_prompt = "\n".join(user_prompt_sections)
-            system_prompt = PROMPTS["A4_pyomo_create_model"]["system"]
+            system_prompt = PROMPTS["build_model_create_model"]["system"]
         else:
             nl_problem = llm_problem_text(state.context.get("nl_problem") or "")
             nl_components_json = (
@@ -341,7 +343,7 @@ Math:
 {runtime_data_note()}
 
 {feedback_context}"""
-            system_prompt = PROMPTS["A4_pyomo"]["system"]
+            system_prompt = PROMPTS["build_model"]["system"]
 
         if benchmark_mode:
             code = llm_client.code_generation_call(
@@ -354,8 +356,8 @@ Math:
             valid, diagnostics = _validate_create_model_entrypoint(code)
             if not valid and generation_mode == "repair_once":
                 repair_iterations = state.tests.setdefault("repair_iterations", {})
-                repair_iterations["A4_validation"] = (
-                    int(repair_iterations.get("A4_validation") or 0) + 1
+                repair_iterations["build_model_validation"] = (
+                    int(repair_iterations.get("build_model_validation") or 0) + 1
                 )
                 diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
                 repair_sections = [
@@ -432,6 +434,9 @@ Math:
             filename="create_model.py" if benchmark_mode else "model_builder.py",
             source=code,
         )
+        state.tests["build_model_error"] = None
+        if feedback and feedback.target_agent == "build_model":
+            state.tests["last_feedback"] = None
 
         logger.info(
             "build_model_success",
@@ -441,6 +446,7 @@ Math:
         )
 
     except Exception as e:
+        state.tests["build_model_error"] = str(e)
         logger.error("build_model_error", error=str(e))
 
     return state
