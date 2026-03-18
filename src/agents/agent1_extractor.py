@@ -44,12 +44,28 @@ Produce both:
             f"{PROMPTS['A1_extractor']['system']}\n\n"
             "Return a JSON object with fields 'contract' and 'components'."
         )
+        trace_input = {
+            "agent": "A0A1_specify_extract",
+            "upstream_artifacts": [
+                {
+                    "label": "problem_input",
+                    "source": "state.context.nl_problem",
+                    "value": nl_problem,
+                },
+                {
+                    "label": "problem_input_note",
+                    "source": "problem_input_note(nl_problem)",
+                    "value": input_note,
+                },
+            ],
+        }
 
         result = llm_client.structured_call(
             sys_prompt=sys_prompt,
             user_prompt=user_prompt,
             pyd_model=SpecifiedComponents,
             temperature=0.45,
+            trace_input=trace_input,
         )
 
         state.context["assumptions"] = result.contract.assumptions

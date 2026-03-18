@@ -29,6 +29,37 @@ async def a7_checker(state: ModelPack) -> ModelPack:
         feedback = state.tests.get("last_feedback")
         if feedback and feedback.target_agent == "A7":
             feedback_note = compact_feedback_context(feedback)
+        trace_input = {
+            "agent": "A7_checker",
+            "upstream_artifacts": [
+                {
+                    "label": "basic_constraints",
+                    "source": "state.components_nl.constraints_basic",
+                    "value": basic_constraints_json,
+                },
+            ],
+        }
+        if feedback_note:
+            trace_input["upstream_artifacts"].append(
+                {
+                    "label": "targeted_feedback",
+                    "source": "state.tests.last_feedback",
+                    "value": feedback_note,
+                }
+            )
+        existing_checker_code = (
+            state.code.solution_checker.source
+            if state.code.solution_checker and state.code.solution_checker.source
+            else None
+        )
+        if existing_checker_code:
+            trace_input["upstream_artifacts"].append(
+                {
+                    "label": "existing_checker_code",
+                    "source": "state.code.solution_checker.source",
+                    "value": existing_checker_code,
+                }
+            )
 
         user_prompt_sections = [
             "Basic constraints:",
@@ -37,11 +68,11 @@ async def a7_checker(state: ModelPack) -> ModelPack:
         ]
         if feedback_note:
             user_prompt_sections.extend(["Targeted feedback:", feedback_note])
-            if state.code.solution_checker and state.code.solution_checker.source:
+            if existing_checker_code:
                 user_prompt_sections.extend(
                     [
                         "Existing checker code to repair:",
-                        f"```python\n{state.code.solution_checker.source}\n```",
+                        f"```python\n{existing_checker_code}\n```",
                     ]
                 )
         user_prompt_sections.extend(
@@ -60,6 +91,7 @@ async def a7_checker(state: ModelPack) -> ModelPack:
             user_prompt=user_prompt,
             temperature=0.3,
             validate=True,
+            trace_input=trace_input,
         )
 
         state.code.solution_checker = CodeBlob(

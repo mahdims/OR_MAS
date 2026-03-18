@@ -254,6 +254,40 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
             signature_line = (
                 sig_match.group(1) if sig_match else "def create_model(...) -> pyo.ConcreteModel:"
             )
+            trace_input = {
+                "agent": "A4_pyomo",
+                "mode": "benchmark_create_model",
+                "upstream_artifacts": [
+                    {
+                        "label": "problem_specification",
+                        "source": "state.context.nl_problem",
+                        "value": problem_spec,
+                    },
+                    {
+                        "label": "data_generator_contract",
+                        "source": "state.context.nl_problem",
+                        "value": contract_block,
+                    },
+                    {
+                        "label": "required_interface",
+                        "source": "state.context.nl_problem",
+                        "value": signature_line,
+                    },
+                    {
+                        "label": "components_math",
+                        "source": "state.components_math",
+                        "value": math_spec_json,
+                    },
+                ],
+            }
+            if feedback_note:
+                trace_input["upstream_artifacts"].append(
+                    {
+                        "label": "targeted_feedback",
+                        "source": "state.tests.last_feedback",
+                        "value": feedback_note,
+                    }
+                )
             user_prompt_sections = [
                 "Structured optimization specification:",
                 problem_spec or "Not available",
@@ -285,6 +319,35 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
                 if state.components_nl is not None
                 else "Not available"
             )
+            trace_input = {
+                "agent": "A4_pyomo",
+                "mode": "default_model_builder",
+                "upstream_artifacts": [
+                    {
+                        "label": "problem_input",
+                        "source": "state.context.nl_problem",
+                        "value": nl_problem,
+                    },
+                    {
+                        "label": "components_nl",
+                        "source": "state.components_nl",
+                        "value": nl_components_json,
+                    },
+                    {
+                        "label": "components_math",
+                        "source": "state.components_math",
+                        "value": state.components_math.model_dump_json(indent=2),
+                    },
+                ],
+            }
+            if feedback_note:
+                trace_input["upstream_artifacts"].append(
+                    {
+                        "label": "targeted_feedback",
+                        "source": "state.tests.last_feedback",
+                        "value": feedback_note,
+                    }
+                )
             user_prompt = f"""Problem:
 {nl_problem or 'Not available'}
 
@@ -308,6 +371,7 @@ Return `ModelBuilder(data: Any) -> pyo.ConcreteModel`."""
                 user_prompt=user_prompt,
                 temperature=0.0,
                 validate=True,
+                trace_input=trace_input,
             )
             valid, diagnostics = _validate_create_model_entrypoint(code)
             if not valid and generation_mode == "repair2":
@@ -337,11 +401,29 @@ Return `ModelBuilder(data: Any) -> pyo.ConcreteModel`."""
                     ]
                 )
                 repair_prompt = "\n".join(repair_sections)
+                repair_trace_input = {
+                    "agent": "A4_pyomo",
+                    "mode": "benchmark_create_model_repair",
+                    "upstream_artifacts": trace_input["upstream_artifacts"]
+                    + [
+                        {
+                            "label": "validation_diagnostics",
+                            "source": "_validate_create_model_entrypoint(previous_code)",
+                            "value": diagnostics,
+                        },
+                        {
+                            "label": "previous_code",
+                            "source": "previous_llm_output",
+                            "value": code,
+                        },
+                    ],
+                }
                 repaired_code = llm_client.code_generation_call(
                     sys_prompt=system_prompt,
                     user_prompt=repair_prompt,
                     temperature=0.0,
                     validate=True,
+                    trace_input=repair_trace_input,
                 )
                 repaired_valid, repaired_diagnostics = _validate_create_model_entrypoint(
                     repaired_code
@@ -361,6 +443,7 @@ Return `ModelBuilder(data: Any) -> pyo.ConcreteModel`."""
                 user_prompt=user_prompt,
                 temperature=0.3,
                 validate=True,
+                trace_input=trace_input,
             )
 
         if benchmark_mode:

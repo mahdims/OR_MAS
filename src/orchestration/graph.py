@@ -14,6 +14,7 @@ from ..agents import (
     agent8_solver,
     agent9_judge,
 )
+from ..llm import llm_client
 from ..schemas import ModelPack
 
 logger = structlog.get_logger(__name__)
@@ -31,44 +32,84 @@ class GraphState(TypedDict):
     model_pack: ModelPack
 
 
-async def run_a0_a1(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent1_extractor.a0_a1_specify_extract(state["model_pack"])
+def _feedback_summary(feedback: object) -> dict[str, object] | None:
+    if feedback is None:
+        return None
+    model_dump = getattr(feedback, "model_dump", None)
+    if callable(model_dump):
+        try:
+            payload = model_dump(mode="json")
+        except TypeError:
+            payload = model_dump()
+        if isinstance(payload, dict):
+            return payload
+    if isinstance(feedback, dict):
+        return dict(feedback)
+    return {"value": str(feedback)}
+
+
+def _append_trajectory_event(model_pack: ModelPack, **event: object) -> None:
+    trajectory = model_pack.tests.setdefault("trajectory", [])
+    if not isinstance(trajectory, list):
+        trajectory = []
+        model_pack.tests["trajectory"] = trajectory
+    entry = {"sequence": len(trajectory) + 1}
+    entry.update(event)
+    trajectory.append(entry)
+
+
+async def _run_agent(
+    state: GraphState,
+    *,
+    label: str,
+    handler,
+) -> GraphState:
+    before = llm_client.trace_length()
+    model_pack = await handler(state["model_pack"])
+    after = llm_client.trace_length()
+    llm_sequences = list(range(before + 1, after + 1))
+    _append_trajectory_event(
+        model_pack,
+        type="agent",
+        agent=label,
+        llm_call_sequences=llm_sequences,
+        feedback=_feedback_summary(model_pack.tests.get("last_feedback")),
+        status=model_pack.status,
+    )
+    state["model_pack"] = model_pack
     return state
+
+
+async def run_a0_a1(state: GraphState) -> GraphState:
+    return await _run_agent(state, label="A0A1_specify_extract", handler=agent1_extractor.a0_a1_specify_extract)
 
 
 async def run_a3(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent3_mathifier.a3_mathifier(state["model_pack"])
-    return state
+    return await _run_agent(state, label="A3_mathifier", handler=agent3_mathifier.a3_mathifier)
 
 
 async def run_a4(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent4_pyomo.a4_pyomo(state["model_pack"])
-    return state
+    return await _run_agent(state, label="A4_pyomo", handler=agent4_pyomo.a4_pyomo)
 
 
 async def run_a5(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent5_datagen.a5_datagen(state["model_pack"])
-    return state
+    return await _run_agent(state, label="A5_datagen", handler=agent5_datagen.a5_datagen)
 
 
 async def run_a6(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent6_screen.a6_screen(state["model_pack"])
-    return state
+    return await _run_agent(state, label="A6_screen", handler=agent6_screen.a6_screen)
 
 
 async def run_a7(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent7_checker.a7_checker(state["model_pack"])
-    return state
+    return await _run_agent(state, label="A7_checker", handler=agent7_checker.a7_checker)
 
 
 async def run_a8(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent8_solver.a8_solver(state["model_pack"])
-    return state
+    return await _run_agent(state, label="A8_solver", handler=agent8_solver.a8_solver)
 
 
 async def run_a9(state: GraphState) -> GraphState:
-    state["model_pack"] = await agent9_judge.a9_judge(state["model_pack"])
-    return state
+    return await _run_agent(state, label="A9_judge", handler=agent9_judge.a9_judge)
 
 
 def route_after_a6(state: GraphState) -> str:
@@ -77,8 +118,22 @@ def route_after_a6(state: GraphState) -> str:
 
     if feedback and feedback.target_agent == "A4":
         logger.info("routing_to_a4", issue=feedback.issue)
+        _append_trajectory_event(
+            state["model_pack"],
+            type="route",
+            from_agent="A6_screen",
+            to_agent="A4_pyomo",
+            reason=_feedback_summary(feedback),
+        )
         return "A4_pyomo"
 
+    _append_trajectory_event(
+        state["model_pack"],
+        type="route",
+        from_agent="A6_screen",
+        to_agent="A7_checker",
+        reason=_feedback_summary(feedback) or {"reason": "screen_passed"},
+    )
     return "A7_checker"
 
 
@@ -87,8 +142,22 @@ def route_after_a9(state: GraphState) -> str:
     feedback = state["model_pack"].tests.get("last_feedback")
 
     if feedback and feedback.issue == "checker_false_negative":
+        _append_trajectory_event(
+            state["model_pack"],
+            type="route",
+            from_agent="A9_judge",
+            to_agent="A7_checker",
+            reason=_feedback_summary(feedback),
+        )
         return "A7_checker"
 
+    _append_trajectory_event(
+        state["model_pack"],
+        type="route",
+        from_agent="A9_judge",
+        to_agent="END",
+        reason=_feedback_summary(feedback) or {"reason": "judge_completed"},
+    )
     return "END"
 
 

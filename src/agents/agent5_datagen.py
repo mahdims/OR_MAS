@@ -31,6 +31,39 @@ async def a5_datagen(state: ModelPack) -> ModelPack:
             if state.components_nl is not None
             else "Not available"
         )
+        math_components_json = (
+            state.components_math.model_dump_json(indent=2)
+            if state.components_math is not None
+            else "Not available"
+        )
+        trace_input = {
+            "agent": "A5_datagen",
+            "upstream_artifacts": [
+                {
+                    "label": "problem_input",
+                    "source": "state.context.nl_problem",
+                    "value": nl_problem,
+                },
+                {
+                    "label": "components_nl",
+                    "source": "state.components_nl",
+                    "value": nl_components_json,
+                },
+                {
+                    "label": "components_math",
+                    "source": "state.components_math",
+                    "value": math_components_json,
+                },
+            ],
+        }
+        if feedback_context:
+            trace_input["upstream_artifacts"].append(
+                {
+                    "label": "targeted_feedback",
+                    "source": "state.tests.last_feedback",
+                    "value": feedback_context,
+                }
+            )
 
         user_prompt = f"""Problem:
 {nl_problem or 'Not available'}
@@ -39,7 +72,7 @@ NL:
 {nl_components_json}
 
 Math:
-{state.components_math.model_dump_json(indent=2) if state.components_math else 'Not available'}
+{math_components_json}
 
 {runtime_data_note()}
 
@@ -54,6 +87,7 @@ Generate feasible data."""
             user_prompt=user_prompt,
             temperature=0.3,
             validate=True,
+            trace_input=trace_input,
         )
 
         state.code.datagen = CodeBlob(language="python", filename="datagen.py", source=code)

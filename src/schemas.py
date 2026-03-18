@@ -125,7 +125,9 @@ class ModelPack(BaseModel):
             "instances": [],
             "logs": [],
             "llm_calls": [],
+            "llm_trace": [],
             "llm_usage_summary": {},
+            "trajectory": [],
             "last_feedback": None,
             "retry_counts": {},  # Track retries per agent
             "repair_iterations": {},  # Preserve total repair counts by feedback source.

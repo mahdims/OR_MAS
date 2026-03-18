@@ -1,5 +1,6 @@
 # modelpack/llm.py
 import ast
+import json
 import inspect
 import os
 import time
@@ -179,6 +180,10 @@ class LLMClient:
         _ACTIVE_LLM_TRACE.reset(token)
         return {"calls": calls, "summary": self._summarize_calls(calls)}
 
+    def trace_length(self) -> int:
+        trace = _ACTIVE_LLM_TRACE.get()
+        return len(trace) if trace is not None else 0
+
     def _detect_caller(self) -> str:
         frame = inspect.currentframe()
         fallback = "unknown"
@@ -254,6 +259,121 @@ class LLMClient:
         finish_reason = getattr(choices[0], "finish_reason", None)
         return str(finish_reason) if finish_reason is not None else None
 
+    def _extract_response_text(self, raw_response: Any) -> Optional[str]:
+        if raw_response is None:
+            return None
+        if isinstance(raw_response, str):
+            return raw_response
+        if isinstance(raw_response, dict):
+            choices = raw_response.get("choices")
+            if isinstance(choices, list) and choices:
+                message = choices[0].get("message")
+                if isinstance(message, dict):
+                    content = message.get("content")
+                    if isinstance(content, list):
+                        text_parts = [
+                            str(item.get("text"))
+                            for item in content
+                            if isinstance(item, dict) and item.get("text") is not None
+                        ]
+                        if text_parts:
+                            return "\n".join(text_parts)
+                    if content is not None:
+                        return str(content)
+            text = raw_response.get("text")
+            if text is not None:
+                return str(text)
+            candidates = raw_response.get("candidates")
+            if isinstance(candidates, list) and candidates:
+                first = candidates[0]
+                if isinstance(first, dict):
+                    content = first.get("content")
+                    if isinstance(content, dict):
+                        parts = content.get("parts")
+                        if isinstance(parts, list):
+                            text_parts = [
+                                str(part.get("text"))
+                                for part in parts
+                                if isinstance(part, dict) and part.get("text") is not None
+                            ]
+                            if text_parts:
+                                return "\n".join(text_parts)
+            return None
+
+        text = getattr(raw_response, "text", None)
+        if text:
+            return str(text)
+
+        choices = getattr(raw_response, "choices", None)
+        if choices:
+            message = getattr(choices[0], "message", None)
+            if message is not None:
+                content = getattr(message, "content", None)
+                if isinstance(content, list):
+                    text_parts: List[str] = []
+                    for item in content:
+                        item_text = getattr(item, "text", None)
+                        if item_text is not None:
+                            text_parts.append(str(item_text))
+                    if text_parts:
+                        return "\n".join(text_parts)
+                if content is not None:
+                    return str(content)
+
+        candidates = getattr(raw_response, "candidates", None)
+        if candidates:
+            first = candidates[0]
+            content = getattr(first, "content", None)
+            if content is not None:
+                parts = getattr(content, "parts", None)
+                if parts:
+                    text_parts = [
+                        str(getattr(part, "text"))
+                        for part in parts
+                        if getattr(part, "text", None) is not None
+                    ]
+                    if text_parts:
+                        return "\n".join(text_parts)
+        return None
+
+    def _serialize_trace_value(self, value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, datetime):
+            return value.astimezone(timezone.utc).isoformat()
+        if isinstance(value, dict):
+            return {
+                str(key): self._serialize_trace_value(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple, set)):
+            return [self._serialize_trace_value(item) for item in value]
+
+        model_dump_json = getattr(value, "model_dump_json", None)
+        if callable(model_dump_json):
+            try:
+                return json.loads(model_dump_json(indent=2))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                pass
+
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            try:
+                return self._serialize_trace_value(model_dump(mode="json"))
+            except TypeError:
+                return self._serialize_trace_value(model_dump())
+
+        dict_fn = getattr(value, "dict", None)
+        if callable(dict_fn):
+            return self._serialize_trace_value(dict_fn())
+
+        if hasattr(value, "__dict__"):
+            return self._serialize_trace_value(
+                {key: item for key, item in vars(value).items() if not key.startswith("_")}
+            )
+
+        return str(value)
+
     @staticmethod
     def _safe_int(value: Any) -> Optional[int]:
         if value is None:
@@ -296,7 +416,13 @@ class LLMClient:
         success: bool,
         error: Optional[str],
         temperature: float,
+        model_name: Optional[str] = None,
         response_model: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+        user_prompt: Optional[str] = None,
+        raw_output_text: Optional[str] = None,
+        extracted_output: Any = None,
+        trace_input: Optional[Dict[str, Any]] = None,
     ) -> None:
         trace = _ACTIVE_LLM_TRACE.get()
         if trace is None:
@@ -311,7 +437,7 @@ class LLMClient:
                 "call_type": call_type,
                 "caller": self._detect_caller(),
                 "provider": self.provider,
-                "model_name": self.model_name,
+                "model_name": model_name or self.model_name,
                 "response_model": response_model,
                 "temperature": float(temperature),
                 "started_at": started_at.astimezone(timezone.utc).isoformat(),
@@ -323,6 +449,13 @@ class LLMClient:
                 "output_tokens": normalized_usage["output_tokens"],
                 "total_tokens": normalized_usage["total_tokens"],
                 "usage": usage_payload,
+                "prompt": {
+                    "system": system_prompt,
+                    "user": user_prompt,
+                },
+                "raw_output_text": raw_output_text,
+                "extracted_output": self._serialize_trace_value(extracted_output),
+                "trace_input": self._serialize_trace_value(trace_input),
             }
         )
 
@@ -382,7 +515,12 @@ class LLMClient:
         wait=wait_exponential(multiplier=1, min=2, max=60),
     )
     def structured_call(
-        self, sys_prompt: str, user_prompt: str, pyd_model: Type[T], temperature: float = 0.0
+        self,
+        sys_prompt: str,
+        user_prompt: str,
+        pyd_model: Type[T],
+        temperature: float = 0.0,
+        trace_input: Optional[Dict[str, Any]] = None,
     ) -> T:
         """Generate structured output using any LLM provider."""
         started_at = datetime.now(timezone.utc)
@@ -421,7 +559,13 @@ class LLMClient:
                 success=True,
                 error=None,
                 temperature=temperature,
+                model_name=self.structured_model_name,
                 response_model=getattr(pyd_model, "__name__", str(pyd_model)),
+                system_prompt=sys_prompt,
+                user_prompt=user_prompt,
+                raw_output_text=self._extract_response_text(getattr(result, "_raw_response", None)),
+                extracted_output=result,
+                trace_input=trace_input,
             )
             logger.info("structured_call_success", provider=self.provider)
             return result
@@ -435,7 +579,15 @@ class LLMClient:
                 success=False,
                 error=str(e),
                 temperature=temperature,
+                model_name=self.structured_model_name,
                 response_model=getattr(pyd_model, "__name__", str(pyd_model)),
+                system_prompt=sys_prompt,
+                user_prompt=user_prompt,
+                raw_output_text=self._extract_response_text(
+                    getattr(result, "_raw_response", None) if result is not None else None
+                ),
+                extracted_output=result,
+                trace_input=trace_input,
             )
             logger.error("structured_call_error", provider=self.provider, error=str(e))
             raise
@@ -446,12 +598,18 @@ class LLMClient:
         wait=wait_exponential(multiplier=1, min=2, max=60),
     )
     def code_generation_call(
-        self, sys_prompt: str, user_prompt: str, temperature: float = 0.0, validate: bool = True
+        self,
+        sys_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.0,
+        validate: bool = True,
+        trace_input: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Generate code with optional validation."""
         started_at = datetime.now(timezone.utc)
         started_perf = time.perf_counter()
         response: Any = None
+        raw_output_text: Optional[str] = None
         try:
             if self.provider == "gemini":
                 response = self.raw_client.generate_content(
@@ -459,6 +617,7 @@ class LLMClient:
                     generation_config=genai.GenerationConfig(temperature=temperature),
                 )
                 code = response.text
+                raw_output_text = code
             else:
                 request_kwargs: Dict[str, Any] = {
                     "model": self.code_generation_model_name,
@@ -502,6 +661,7 @@ class LLMClient:
                 code = choice.message.content
                 if code is None:
                     raise NonRetryableLLMError("model returned empty content")
+                raw_output_text = code
 
             # Extract from markdown
             if "```python" in code:
@@ -530,6 +690,12 @@ class LLMClient:
                 success=True,
                 error=None,
                 temperature=temperature,
+                model_name=self.code_generation_model_name,
+                system_prompt=sys_prompt,
+                user_prompt=user_prompt,
+                raw_output_text=raw_output_text or self._extract_response_text(response),
+                extracted_output=code,
+                trace_input=trace_input,
             )
             return code
 
@@ -542,6 +708,12 @@ class LLMClient:
                 success=False,
                 error=str(e),
                 temperature=temperature,
+                model_name=self.code_generation_model_name,
+                system_prompt=sys_prompt,
+                user_prompt=user_prompt,
+                raw_output_text=raw_output_text or self._extract_response_text(response),
+                extracted_output=None,
+                trace_input=trace_input,
             )
             logger.error("code_generation_error", error=str(e))
             raise

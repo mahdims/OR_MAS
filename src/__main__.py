@@ -15,8 +15,34 @@ load_dotenv()
 logger = structlog.get_logger(__name__)
 
 
+def _compact_llm_call(call: dict[str, object]) -> dict[str, object]:
+    keys = [
+        "sequence",
+        "call_type",
+        "caller",
+        "provider",
+        "model_name",
+        "response_model",
+        "temperature",
+        "started_at",
+        "latency_seconds",
+        "success",
+        "error",
+        "finish_reason",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "usage",
+    ]
+    return {key: call.get(key) for key in keys}
+
+
 def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -> None:
-    model_pack.tests["llm_calls"] = trace_payload.get("calls", [])
+    detailed_calls = [
+        dict(call) for call in trace_payload.get("calls", []) if isinstance(call, dict)
+    ]
+    model_pack.tests["llm_trace"] = detailed_calls
+    model_pack.tests["llm_calls"] = [_compact_llm_call(call) for call in detailed_calls]
     model_pack.tests["llm_usage_summary"] = trace_payload.get("summary", {})
 
 
@@ -103,11 +129,22 @@ async def run_single_agent_generation(
 
     trace_token = llm_client.begin_trace()
     try:
+        trace_input = {
+            "agent": "single_agent_create_model",
+            "upstream_artifacts": [
+                {
+                    "label": "problem_input",
+                    "source": "problem_text",
+                    "value": problem_text,
+                }
+            ],
+        }
         code = llm_client.code_generation_call(
             sys_prompt=system_prompt,
             user_prompt=problem_text,
             temperature=0.0,
             validate=True,
+            trace_input=trace_input,
         )
         valid, diagnostics = _validate_create_model_entrypoint(code)
         if not valid and normalized_mode == "repair2":
@@ -127,11 +164,28 @@ Previous code to repair:
 ```
 
 Return corrected code only."""
+            repair_trace_input = {
+                "agent": "single_agent_create_model",
+                "upstream_artifacts": trace_input["upstream_artifacts"]
+                + [
+                    {
+                        "label": "validation_diagnostics",
+                        "source": "_validate_create_model_entrypoint(previous_code)",
+                        "value": diagnostics,
+                    },
+                    {
+                        "label": "previous_code",
+                        "source": "previous_llm_output",
+                        "value": code,
+                    },
+                ],
+            }
             code = llm_client.code_generation_call(
                 sys_prompt=system_prompt,
                 user_prompt=repair_prompt,
                 temperature=0.0,
                 validate=True,
+                trace_input=repair_trace_input,
             )
             valid, diagnostics = _validate_create_model_entrypoint(code)
 
