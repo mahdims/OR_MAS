@@ -247,6 +247,9 @@ Write `SolutionChecker(data, solution, tolerance=1e-6)`.
 Rules:
 - check only listed basic constraints
 - support dict or attribute access
+- use only exact solution variable names provided in grounding artifacts
+- do not invent aliases or renamed fields
+- prefer raw tuple/native keys and then the provided string fallback keys
 - return `{\"feasible\": bool, \"violations\": str}`
 - tolerate noise; skip ambiguous checks
 - return code only"""},

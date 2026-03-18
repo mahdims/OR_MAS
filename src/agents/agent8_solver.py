@@ -3,7 +3,12 @@ import structlog
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
 from ..schemas import ModelPack, TestInstance
-from .utils import load_modules_with_shared_namespace, resolve_solver
+from .utils import (
+    load_modules_with_shared_namespace,
+    resolve_solver,
+    store_solution_entry,
+    summarize_solution_dict,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -63,9 +68,16 @@ async def a8_solver(state: ModelPack) -> ModelPack:
                 if feasible:
                     for var in model.component_objects(pyo.Var, active=True):
                         var_name = var.name
-                        solution_dict[var_name] = {}
-                        for index in var:
-                            solution_dict[var_name][str(index)] = pyo.value(var[index])
+                        if var.is_indexed():
+                            solution_dict[var_name] = {}
+                            for index in var:
+                                store_solution_entry(
+                                    solution_dict[var_name],
+                                    index,
+                                    pyo.value(var[index]),
+                                )
+                        else:
+                            solution_dict[var_name] = pyo.value(var)
 
                 obj_value = None
                 if feasible and hasattr(model, "objective"):
@@ -88,6 +100,10 @@ async def a8_solver(state: ModelPack) -> ModelPack:
                 )
 
                 state.tests["instances"].append(instance)
+                if feasible and solution_dict:
+                    observed_solution_schema = summarize_solution_dict(solution_dict)
+                    observed_solution_schema["instance_id"] = instance.id
+                    state.tests["observed_solution_schema"] = observed_solution_schema
 
                 logger.info("a8_instance_solved", seed=seed, feasible=feasible, obj_value=obj_value)
 

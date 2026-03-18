@@ -89,6 +89,7 @@ class Feedback(BaseModel):
     source_agent: str
     target_agent: str
     issue: Literal[
+        "checker_schema_mismatch",
         "data_infeasible",
         "checker_false_negative",
         "code_build_error",
