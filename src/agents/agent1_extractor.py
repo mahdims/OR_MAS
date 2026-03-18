@@ -46,7 +46,7 @@ Produce both:
             "Return a JSON object with fields 'contract' and 'components'."
         )
         trace_input = {
-            "agent": "A0A1_specify_extract",
+            "agent": "specify_problem",
             "upstream_artifacts": [
                 {
                     "label": "problem_input",

@@ -1,7 +1,8 @@
 # modelpack/orchestration/graph.py
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TypedDict
 
-import structlog
 from langgraph.graph import END, StateGraph
 
 from ..agents import (
@@ -17,15 +18,45 @@ from ..agents import (
 from ..llm import llm_client
 from ..schemas import ModelPack
 
-logger = structlog.get_logger(__name__)
-
-# Benchmark traces in temp/ only exercise the main full graph.
 MAIN_FULL_GRAPH_VARIANT = "main"
-GRAPH_VARIANT_ALIASES = {
-    "main": MAIN_FULL_GRAPH_VARIANT,
-    "no_a2_merge_a0_a1": MAIN_FULL_GRAPH_VARIANT,
-    "no_a2_merge_a0_a1_no_a3b": MAIN_FULL_GRAPH_VARIANT,
+SUPPORTED_GRAPH_VARIANTS = {
+    MAIN_FULL_GRAPH_VARIANT,
+    "no_a2_merge_a0_a1",
+    "no_a2_merge_a0_a1_no_a3b",
 }
+
+END_NODE = "END"
+
+
+@dataclass(frozen=True)
+class AgentSpec:
+    key: str
+    node_name: str
+    handler: Callable[[ModelPack], Awaitable[ModelPack]]
+    feedback_target: str | None = None
+
+
+AGENT_SPECS = (
+    AgentSpec("specify", "specify_problem", agent1_extractor.a0_a1_specify_extract),
+    AgentSpec("math", "derive_math", agent3_mathifier.a3_mathifier),
+    AgentSpec("model", "build_model", agent4_pyomo.a4_pyomo, feedback_target="A4"),
+    AgentSpec("data", "generate_data", agent5_datagen.a5_datagen),
+    AgentSpec("screen", "screen_data", agent6_screen.a6_screen),
+    AgentSpec("solve", "solve_model", agent8_solver.a8_solver),
+    AgentSpec("check", "check_solution", agent7_checker.a7_checker, feedback_target="A7"),
+    AgentSpec("judge", "judge_solution", agent9_judge.a9_judge),
+)
+
+AGENTS_BY_KEY = {spec.key: spec for spec in AGENT_SPECS}
+AGENTS_BY_NODE = {spec.node_name: spec for spec in AGENT_SPECS}
+AGENTS_BY_FEEDBACK_TARGET = {
+    spec.feedback_target: spec
+    for spec in AGENT_SPECS
+    if spec.feedback_target
+}
+GENERATION_PATH = tuple(spec.node_name for spec in AGENT_SPECS[:3])
+FULL_GRAPH_NODES = tuple(spec.node_name for spec in AGENT_SPECS)
+PRE_SCREEN_PATH = tuple(spec.node_name for spec in AGENT_SPECS[:5])
 
 
 class GraphState(TypedDict):
@@ -79,65 +110,89 @@ async def _run_agent(
     return state
 
 
-async def run_a0_a1(state: GraphState) -> GraphState:
-    return await _run_agent(state, label="A0A1_specify_extract", handler=agent1_extractor.a0_a1_specify_extract)
+def _node(key: str) -> str:
+    return AGENTS_BY_KEY[key].node_name
 
 
-async def run_a3(state: GraphState) -> GraphState:
-    return await _run_agent(state, label="A3_mathifier", handler=agent3_mathifier.a3_mathifier)
+def _feedback_target(key: str) -> str | None:
+    return AGENTS_BY_KEY[key].feedback_target
 
 
-async def run_a4(state: GraphState) -> GraphState:
-    return await _run_agent(state, label="A4_pyomo", handler=agent4_pyomo.a4_pyomo)
+def _node_for_feedback_target(target_agent: str | None) -> str | None:
+    spec = AGENTS_BY_FEEDBACK_TARGET.get(target_agent)
+    return spec.node_name if spec else None
 
 
-async def run_a5(state: GraphState) -> GraphState:
-    return await _run_agent(state, label="A5_datagen", handler=agent5_datagen.a5_datagen)
+def _make_runner(label: str) -> Callable[[GraphState], Awaitable[GraphState]]:
+    handler = AGENTS_BY_NODE[label].handler
+
+    async def run(state: GraphState) -> GraphState:
+        return await _run_agent(state, label=label, handler=handler)
+
+    return run
 
 
-async def run_a6(state: GraphState) -> GraphState:
-    return await _run_agent(state, label="A6_screen", handler=agent6_screen.a6_screen)
+RUNNERS = {label: _make_runner(label) for label in AGENTS_BY_NODE}
 
 
-async def run_a7(state: GraphState) -> GraphState:
-    return await _run_agent(state, label="A7_checker", handler=agent7_checker.a7_checker)
-
-
-async def run_a8(state: GraphState) -> GraphState:
-    return await _run_agent(state, label="A8_solver", handler=agent8_solver.a8_solver)
-
-
-async def run_a9(state: GraphState) -> GraphState:
-    return await _run_agent(state, label="A9_judge", handler=agent9_judge.a9_judge)
-
-
-def route_after_a6(state: GraphState) -> str:
-    """Route after feasibility screen."""
-    feedback = state["model_pack"].tests.get("last_feedback")
-
-    if feedback and feedback.target_agent == "A4":
-        logger.info("routing_to_a4", issue=feedback.issue)
-        _append_trajectory_event(
-            state["model_pack"],
-            type="route",
-            from_agent="A6_screen",
-            to_agent="A4_pyomo",
-            reason=_feedback_summary(feedback),
-        )
-        return "A4_pyomo"
-
+def _route(
+    state: GraphState,
+    *,
+    from_node: str,
+    to_node: str,
+    reason: object,
+) -> str:
     _append_trajectory_event(
         state["model_pack"],
         type="route",
-        from_agent="A6_screen",
-        to_agent="A8_solver",
-        reason=_feedback_summary(feedback) or {"reason": "screen_passed"},
+        from_agent=from_node,
+        to_agent=to_node,
+        reason=reason,
     )
-    return "A8_solver"
+    return to_node
 
 
-def route_after_a8(state: GraphState) -> str:
-    """Route after solving once so the checker can use real solution artifacts."""
+def _feedback_route(
+    state: GraphState,
+    *,
+    from_node: str,
+    default_to: str,
+    default_reason: object,
+    allowed_targets: frozenset[str] | None = None,
+) -> str:
+    feedback = state["model_pack"].tests.get("last_feedback")
+    target_agent = getattr(feedback, "target_agent", None) if feedback else None
+
+    if target_agent and (allowed_targets is None or target_agent in allowed_targets):
+        target_node = _node_for_feedback_target(target_agent)
+        if target_node:
+            return _route(
+                state,
+                from_node=from_node,
+                to_node=target_node,
+                reason=_feedback_summary(feedback),
+            )
+
+    return _route(
+        state,
+        from_node=from_node,
+        to_node=default_to,
+        reason=_feedback_summary(feedback) or default_reason,
+    )
+
+
+def route_after_screen(state: GraphState) -> str:
+    model_feedback_target = _feedback_target("model")
+    return _feedback_route(
+        state,
+        from_node=_node("screen"),
+        default_to=_node("solve"),
+        default_reason={"reason": "screen_passed"},
+        allowed_targets=frozenset({model_feedback_target}) if model_feedback_target else frozenset(),
+    )
+
+
+def route_after_solve(state: GraphState) -> str:
     solved_instances = [
         instance
         for instance in state["model_pack"].tests.get("instances", [])
@@ -147,143 +202,97 @@ def route_after_a8(state: GraphState) -> str:
     ]
 
     if solved_instances:
-        _append_trajectory_event(
-            state["model_pack"],
-            type="route",
-            from_agent="A8_solver",
-            to_agent="A7_checker",
+        return _route(
+            state,
+            from_node=_node("solve"),
+            to_node=_node("check"),
             reason={"reason": "solved_instances_available", "count": len(solved_instances)},
         )
-        return "A7_checker"
 
-    _append_trajectory_event(
-        state["model_pack"],
-        type="route",
-        from_agent="A8_solver",
-        to_agent="END",
+    return _route(
+        state,
+        from_node=_node("solve"),
+        to_node=END_NODE,
         reason={"reason": "no_solved_instances"},
     )
-    return "END"
 
 
-def route_after_a9(state: GraphState) -> str:
-    """Route after cross-validation."""
-    feedback = state["model_pack"].tests.get("last_feedback")
-
-    if feedback and getattr(feedback, "target_agent", None) == "A7":
-        _append_trajectory_event(
-            state["model_pack"],
-            type="route",
-            from_agent="A9_judge",
-            to_agent="A7_checker",
-            reason=_feedback_summary(feedback),
-        )
-        return "A7_checker"
-
-    if feedback and getattr(feedback, "target_agent", None) == "A4":
-        _append_trajectory_event(
-            state["model_pack"],
-            type="route",
-            from_agent="A9_judge",
-            to_agent="A4_pyomo",
-            reason=_feedback_summary(feedback),
-        )
-        return "A4_pyomo"
-
-    _append_trajectory_event(
-        state["model_pack"],
-        type="route",
-        from_agent="A9_judge",
-        to_agent="END",
-        reason=_feedback_summary(feedback) or {"reason": "judge_completed"},
+def route_after_judge(state: GraphState) -> str:
+    return _feedback_route(
+        state,
+        from_node=_node("judge"),
+        default_to=END_NODE,
+        default_reason={"reason": "judge_completed"},
     )
-    return "END"
 
-
-def _normalize_graph_variant(graph_variant: str) -> str:
+def _validate_graph_variant(graph_variant: str) -> None:
     normalized = (graph_variant or MAIN_FULL_GRAPH_VARIANT).strip().lower()
-    try:
-        return GRAPH_VARIANT_ALIASES[normalized]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported full graph variant: {graph_variant}") from exc
+    if normalized not in SUPPORTED_GRAPH_VARIANTS:
+        raise ValueError(f"Unsupported full graph variant: {graph_variant}")
+
+
+def _add_nodes(graph: StateGraph, node_names: tuple[str, ...]) -> None:
+    for node_name in node_names:
+        graph.add_node(node_name, RUNNERS[node_name])
+
+
+def _add_linear_edges(graph: StateGraph, node_names: tuple[str, ...]) -> None:
+    for from_node, to_node in zip(node_names, node_names[1:]):
+        graph.add_edge(from_node, to_node)
 
 
 def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
-    """Create the benchmark-used full graph with feedback loops."""
-
-    _normalize_graph_variant(graph_variant)
+    _validate_graph_variant(graph_variant)
 
     graph = StateGraph(GraphState)
-
-    graph.add_node("A0A1_specify_extract", run_a0_a1)
-    graph.add_node("A3_mathifier", run_a3)
-    graph.add_node("A4_pyomo", run_a4)
-    graph.add_node("A5_datagen", run_a5)
-    graph.add_node("A6_screen", run_a6)
-    graph.add_node("A7_checker", run_a7)
-    graph.add_node("A8_solver", run_a8)
-    graph.add_node("A9_judge", run_a9)
-
-    graph.add_edge("A0A1_specify_extract", "A3_mathifier")
-    graph.add_edge("A3_mathifier", "A4_pyomo")
-    graph.add_edge("A4_pyomo", "A5_datagen")
-    graph.add_edge("A5_datagen", "A6_screen")
-    graph.add_edge("A7_checker", "A9_judge")
+    _add_nodes(graph, FULL_GRAPH_NODES)
+    _add_linear_edges(graph, PRE_SCREEN_PATH)
+    graph.add_edge(_node("check"), _node("judge"))
 
     graph.add_conditional_edges(
-        "A6_screen",
-        route_after_a6,
+        _node("screen"),
+        route_after_screen,
         {
-            "A4_pyomo": "A4_pyomo",
-            "A8_solver": "A8_solver",
+            _node("model"): _node("model"),
+            _node("solve"): _node("solve"),
         },
     )
     graph.add_conditional_edges(
-        "A8_solver",
-        route_after_a8,
+        _node("solve"),
+        route_after_solve,
         {
-            "A7_checker": "A7_checker",
-            "END": END,
+            _node("check"): _node("check"),
+            END_NODE: END,
         },
     )
     graph.add_conditional_edges(
-        "A9_judge",
-        route_after_a9,
+        _node("judge"),
+        route_after_judge,
         {
-            "A4_pyomo": "A4_pyomo",
-            "A7_checker": "A7_checker",
-            "END": END,
+            _node("model"): _node("model"),
+            _node("check"): _node("check"),
+            END_NODE: END,
         },
     )
 
-    graph.set_entry_point("A0A1_specify_extract")
+    graph.set_entry_point(_node("specify"))
     return graph
 
 
 def create_generation_graph() -> StateGraph:
-    """Create the minimal MAS path that stops after Pyomo generation."""
-
     graph = StateGraph(GraphState)
-
-    graph.add_node("A0A1_specify_extract", run_a0_a1)
-    graph.add_node("A3_mathifier", run_a3)
-    graph.add_node("A4_pyomo", run_a4)
-
-    graph.add_edge("A0A1_specify_extract", "A3_mathifier")
-    graph.add_edge("A3_mathifier", "A4_pyomo")
-    graph.add_edge("A4_pyomo", END)
-
-    graph.set_entry_point("A0A1_specify_extract")
+    _add_nodes(graph, GENERATION_PATH)
+    _add_linear_edges(graph, GENERATION_PATH)
+    graph.add_edge(_node("model"), END)
+    graph.set_entry_point(_node("specify"))
     return graph
 
 
 def create_app(graph_variant: str = MAIN_FULL_GRAPH_VARIANT):
-    """Create compiled app without checkpointing."""
     graph = create_graph(graph_variant=graph_variant)
     return graph.compile()
 
 
 def create_generation_app():
-    """Create compiled generation-only app without checkpointing."""
     graph = create_generation_graph()
     return graph.compile()

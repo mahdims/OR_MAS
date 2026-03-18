@@ -37,7 +37,7 @@ async def a5_datagen(state: ModelPack) -> ModelPack:
             else "Not available"
         )
         trace_input = {
-            "agent": "A5_datagen",
+            "agent": "generate_data",
             "upstream_artifacts": [
                 {
                     "label": "problem_input",

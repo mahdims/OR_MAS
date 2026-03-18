@@ -29,7 +29,7 @@ Convert to mathematical notation in LaTeX.
 Preserve upstream ids via maps_to and preserve tuple/index order exactly as described in the NL components.
 Map every explicit NL requirement to a math constraint. Stay compact and non-speculative."""
         trace_input = {
-            "agent": "A3_mathifier",
+            "agent": "derive_math",
             "upstream_artifacts": [
                 {
                     "label": "components_nl",

@@ -46,7 +46,7 @@ async def a7_checker(state: ModelPack) -> ModelPack:
         if feedback and feedback.target_agent == "A7":
             feedback_note = compact_feedback_context(feedback)
         trace_input = {
-            "agent": "A7_checker",
+            "agent": "check_solution",
             "upstream_artifacts": [
                 {
                     "label": "constraint_catalog",

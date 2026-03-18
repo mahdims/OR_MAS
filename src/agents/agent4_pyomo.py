@@ -244,7 +244,7 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
                 sig_match.group(1) if sig_match else "def create_model(...) -> pyo.ConcreteModel:"
             )
             trace_input = {
-                "agent": "A4_pyomo",
+                "agent": "build_model",
                 "mode": "benchmark_create_model",
                 "upstream_artifacts": [
                     {
@@ -302,7 +302,7 @@ async def a4_pyomo(state: ModelPack) -> ModelPack:
                 else "Not available"
             )
             trace_input = {
-                "agent": "A4_pyomo",
+                "agent": "build_model",
                 "mode": "default_model_builder",
                 "upstream_artifacts": [
                     {
@@ -374,7 +374,7 @@ Math:
                 repair_sections.append("Return corrected code only.")
                 repair_prompt = "\n".join(repair_sections)
                 repair_trace_input = {
-                    "agent": "A4_pyomo",
+                    "agent": "build_model",
                     "mode": "benchmark_create_model_repair",
                     "upstream_artifacts": trace_input["upstream_artifacts"]
                     + [
