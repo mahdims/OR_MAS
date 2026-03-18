@@ -118,22 +118,6 @@ class LLMClient:
             DEFAULT_MAX_LENGTH_RETRIES if max_length_retries is None else max_length_retries
         )
         self.allow_truncated_responses = _env_bool("OPENAI_CLIENT_ALLOW_TRUNCATION", default=False)
-        reasoning_effort = os.getenv("OPENAI_CLIENT_REASONING_EFFORT")
-        reasoning_exclude = os.getenv("OPENAI_CLIENT_REASONING_EXCLUDE")
-        self.openai_extra_body: Optional[Dict[str, Any]] = None
-        if reasoning_effort or reasoning_exclude:
-            reasoning_config: Dict[str, Any] = {}
-            if reasoning_effort:
-                reasoning_config["effort"] = reasoning_effort
-            if reasoning_exclude:
-                reasoning_config["exclude"] = reasoning_exclude.strip().lower() in {
-                    "1",
-                    "true",
-                    "yes",
-                    "y",
-                }
-            if reasoning_config:
-                self.openai_extra_body = {"reasoning": reasoning_config}
 
         # Initialize client based on provider
         if self.provider == "gemini":
@@ -584,8 +568,6 @@ class LLMClient:
                 }
                 if self.max_completion_tokens is not None:
                     request_kwargs["max_completion_tokens"] = self.max_completion_tokens
-                if self.openai_extra_body is not None:
-                    request_kwargs["extra_body"] = self.openai_extra_body
                 result = self.client.chat.completions.create(**request_kwargs)
 
             self._record_call(
@@ -672,8 +654,6 @@ class LLMClient:
                     "messages": request_messages,
                     "temperature": temperature,
                 }
-                if self.openai_extra_body is not None:
-                    request_kwargs["extra_body"] = self.openai_extra_body
                 response = self.raw_client.chat.completions.create(**request_kwargs)
                 choice = response.choices[0]
                 code = choice.message.content
