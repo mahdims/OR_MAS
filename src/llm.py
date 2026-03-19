@@ -8,12 +8,10 @@ from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
-import google.generativeai as genai
-from google.generativeai.types import helper_types
 import instructor
 import structlog
 from dotenv import load_dotenv
-from openai import OpenAI
+from litellm import completion as litellm_completion
 from pydantic import BaseModel
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
@@ -31,14 +29,12 @@ class NonRetryableLLMError(RuntimeError):
     """Raised for deterministic LLM response issues that retries will not fix."""
 
 
-DEFAULT_OPENAI_MODEL = "gpt-4.1"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-pro"
+DEFAULT_MODEL = "gpt-4.1"
 DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS = 4096
-DEFAULT_MAX_LENGTH_RETRIES = 2
 
 
 def _env_retry_attempts(default: int = 3) -> int:
-    raw_value = os.getenv("OPENAI_CLIENT_MAX_ATTEMPTS")
+    raw_value = os.getenv("LLM_CLIENT_MAX_ATTEMPTS")
     if not raw_value:
         return default
     try:
@@ -59,24 +55,6 @@ def _env_optional_positive_int(name: str) -> Optional[int]:
     return parsed_value if parsed_value > 0 else None
 
 
-def _env_optional_nonnegative_int(name: str) -> Optional[int]:
-    raw_value = os.getenv(name)
-    if not raw_value:
-        return None
-    try:
-        parsed_value = int(raw_value)
-    except ValueError:
-        return None
-    return parsed_value if parsed_value >= 0 else None
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw_value = os.getenv(name)
-    if raw_value is None or not raw_value.strip():
-        return default
-    return raw_value.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
 class LLMClient:
     """Unified LLM client supporting multiple providers via instructor."""
 
@@ -88,39 +66,22 @@ class LLMClient:
         base_url: str = None,
     ):
         configured_model_name = model_name or os.getenv("MODEL_NAME") or os.getenv("DEFAULT_MODEL")
-        resolved_provider = provider or os.getenv("PROVIDER")
-        if not resolved_provider:
-            resolved_provider = (
-                "gemini"
-                if configured_model_name and "gemini" in configured_model_name.lower()
-                else "openai"
-            )
-        self.provider = resolved_provider.lower().replace("gemeni", "gemini")
-        if configured_model_name:
-            self.model_name = configured_model_name
-        elif self.provider == "gemini":
-            self.model_name = DEFAULT_GEMINI_MODEL
-        else:
-            self.model_name = DEFAULT_OPENAI_MODEL
+        self.provider = str(provider or os.getenv("PROVIDER") or "litellm").strip().lower() or "litellm"
+        self.model_name = configured_model_name or DEFAULT_MODEL
         self.structured_model_name = os.getenv("STRUCTURED_MODEL_NAME") or self.model_name
         self.code_generation_model_name = os.getenv("CODE_MODEL_NAME") or self.model_name
         self.base_url = base_url or os.getenv("BASE_URL")
         openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         self.max_completion_tokens = (
-            _env_optional_positive_int("OPENAI_CLIENT_MAX_COMPLETION_TOKENS")
-            or _env_optional_positive_int("OPENAI_CLIENT_MAX_TOKENS")
+            _env_optional_positive_int("LLM_CLIENT_MAX_COMPLETION_TOKENS")
+            or _env_optional_positive_int("LLM_CLIENT_MAX_TOKENS")
         )
         self.length_retry_max_completion_tokens = (
-            _env_optional_positive_int("OPENAI_CLIENT_LENGTH_RETRY_MAX_COMPLETION_TOKENS")
+            _env_optional_positive_int("LLM_CLIENT_LENGTH_RETRY_MAX_COMPLETION_TOKENS")
             or DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS
         )
-        max_length_retries = _env_optional_nonnegative_int("OPENAI_CLIENT_MAX_LENGTH_RETRIES")
-        self.max_length_retries = (
-            DEFAULT_MAX_LENGTH_RETRIES if max_length_retries is None else max_length_retries
-        )
-        self.allow_truncated_responses = _env_bool("OPENAI_CLIENT_ALLOW_TRUNCATION", default=False)
         timeout_seconds = None
-        timeout_raw = os.getenv("OPENAI_CLIENT_TIMEOUT_SECONDS")
+        timeout_raw = os.getenv("LLM_CLIENT_TIMEOUT_SECONDS")
         if timeout_raw:
             try:
                 parsed_timeout = float(timeout_raw)
@@ -130,33 +91,11 @@ class LLMClient:
                 timeout_seconds = None
         self.timeout_seconds = timeout_seconds
 
-        # Initialize client based on provider
-        if self.provider == "gemini":
-            self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
-            genai.configure(api_key=self.api_key)
-            base_client = genai.GenerativeModel(self.model_name or "gemini-1.5-pro")
-            self.raw_client = base_client
-            self.client = instructor.from_gemini(
-                client=base_client, mode=instructor.Mode.GEMINI_JSON
-            )
+        if self.base_url and "openrouter.ai" in self.base_url.lower():
+            self.api_key = api_key or openrouter_api_key or os.getenv("API_KEY")
         else:
-            if self.base_url and "openrouter.ai" in self.base_url.lower():
-                self.api_key = (
-                    api_key
-                    or openrouter_api_key
-                    or os.getenv("OPENAI_API_KEY")
-                    or os.getenv("API_KEY")
-                )
-            else:
-                self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
-            # OpenAI-compatible (OpenAI, DeepSeek, Qwen, local)
-            base_client = OpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=self.timeout_seconds,
-            )
-            self.raw_client = base_client
-            self.client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
+            self.api_key = api_key or os.getenv("API_KEY")
+        self.client = instructor.from_litellm(litellm_completion, mode=instructor.Mode.JSON)
 
     def begin_trace(self) -> Token:
         return _ACTIVE_LLM_TRACE.set([])
@@ -473,31 +412,28 @@ class LLMClient:
             {"role": "user", "content": str(user_prompt or "")},
         ]
 
-    @staticmethod
-    def _gemini_system_instruction(messages: List[Dict[str, Any]]) -> Optional[str]:
-        if not messages:
-            return None
-        first = messages[0]
-        if str(first.get("role") or "").strip().lower() != "system":
-            return None
-        content = str(first.get("content") or "").strip()
-        return content or None
-
-    @staticmethod
-    def _messages_to_gemini_contents(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        contents: List[Dict[str, Any]] = []
-        for message in messages:
-            role = str(message.get("role") or "user").strip().lower()
-            if role == "system":
-                continue
-            gemini_role = "model" if role == "assistant" else "user"
-            contents.append(
-                {
-                    "role": gemini_role,
-                    "parts": [str(message.get("content") or "")],
-                }
-            )
-        return contents
+    def _build_completion_kwargs(
+        self,
+        *,
+        model_name: str,
+        messages: List[Dict[str, Any]],
+        temperature: float,
+        max_completion_tokens: Optional[int],
+    ) -> Dict[str, Any]:
+        request_kwargs: Dict[str, Any] = {
+            "model": model_name,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if max_completion_tokens is not None:
+            request_kwargs["max_completion_tokens"] = max_completion_tokens
+        if self.api_key:
+            request_kwargs["api_key"] = self.api_key
+        if self.base_url:
+            request_kwargs["base_url"] = self.base_url
+        if self.timeout_seconds is not None:
+            request_kwargs["timeout"] = self.timeout_seconds
+        return request_kwargs
 
     def _summarize_calls(self, calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         summary: Dict[str, Any] = {
@@ -567,27 +503,17 @@ class LLMClient:
         started_perf = time.perf_counter()
         result: Optional[T] = None
         try:
-            if self.provider == "gemini":
-                result = self.client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    response_model=pyd_model,
-                )
-            else:
-                request_kwargs: Dict[str, Any] = {
-                    "model": self.structured_model_name,
-                    "messages": [
-                        {"role": "system", "content": sys_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "response_model": pyd_model,
-                    "temperature": temperature,
-                }
-                if self.max_completion_tokens is not None:
-                    request_kwargs["max_completion_tokens"] = self.max_completion_tokens
-                result = self.client.chat.completions.create(**request_kwargs)
+            request_kwargs = self._build_completion_kwargs(
+                model_name=self.structured_model_name,
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                max_completion_tokens=self.max_completion_tokens,
+            )
+            request_kwargs["response_model"] = pyd_model
+            result = self.client.chat.completions.create(**request_kwargs)
 
             self._record_call(
                 call_type="structured",
@@ -660,47 +586,19 @@ class LLMClient:
             request_system_prompt = str(sys_prompt or "")
             request_user_prompt = str(user_prompt or "")
         try:
-            if self.provider == "gemini":
-                generation_config_kwargs: Dict[str, Any] = {"temperature": temperature}
-                max_output_tokens = (
+            request_kwargs = self._build_completion_kwargs(
+                model_name=self.code_generation_model_name,
+                messages=request_messages,
+                temperature=temperature,
+                max_completion_tokens=(
                     self.max_completion_tokens or self.length_retry_max_completion_tokens
-                )
-                if max_output_tokens is not None:
-                    generation_config_kwargs["max_output_tokens"] = max_output_tokens
-                request_options = None
-                if self.timeout_seconds is not None:
-                    request_options = helper_types.RequestOptions(timeout=self.timeout_seconds)
-                gemini_model = genai.GenerativeModel(
-                    self.code_generation_model_name,
-                    system_instruction=self._gemini_system_instruction(request_messages),
-                )
-                gemini_contents = self._messages_to_gemini_contents(request_messages)
-                if not gemini_contents:
-                    raise NonRetryableLLMError("gemini request must include at least one non-system message")
-                prompt_payload: Any = (
-                    gemini_contents[0]["parts"][0]
-                    if len(gemini_contents) == 1 and gemini_contents[0]["role"] == "user"
-                    else gemini_contents
-                )
-                response = gemini_model.generate_content(
-                    prompt_payload,
-                    generation_config=genai.GenerationConfig(**generation_config_kwargs),
-                    request_options=request_options,
-                )
-                code = response.text
-                raw_output_text = code
-            else:
-                request_kwargs: Dict[str, Any] = {
-                    "model": self.code_generation_model_name,
-                    "messages": request_messages,
-                    "temperature": temperature,
-                }
-                response = self.raw_client.chat.completions.create(**request_kwargs)
-                choice = response.choices[0]
-                code = choice.message.content
-                if code is None:
-                    raise NonRetryableLLMError("model returned empty content")
-                raw_output_text = code
+                ),
+            )
+            response = litellm_completion(**request_kwargs)
+            code = self._extract_response_text(response)
+            if code is None:
+                raise NonRetryableLLMError("model returned empty content")
+            raw_output_text = code
 
             # Extract from markdown
             if "```python" in code:

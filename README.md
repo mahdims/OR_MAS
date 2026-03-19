@@ -26,11 +26,13 @@ pip install -r requirements.txt
 Copy `.env.example` to `.env` and set your API key:
 
 ```env
-PROVIDER=openai          # or: gemini, deepseek, qwen
 MODEL_NAME=gpt-4.1
 API_KEY=your-api-key
+LLM_CLIENT_TIMEOUT_SECONDS=120
 # Optional: stronger codegen-specific override
 # CODE_MODEL_NAME=gpt-4.1
+# Optional: OpenRouter / local endpoint
+# BASE_URL=https://openrouter.ai/api/v1
 ```
 
 ## Usage

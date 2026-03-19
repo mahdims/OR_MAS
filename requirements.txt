@@ -1,7 +1,6 @@
 # Core LLM dependencies
-openai>=1.0.0
-google-generativeai>=0.3.0
 instructor>=1.0.0
+litellm>=1.76.0
 
 # Data validation
 pydantic>=2.0.0
