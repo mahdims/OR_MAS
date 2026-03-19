@@ -230,7 +230,10 @@ async def build_model(state: ModelPack) -> ModelPack:
         feedback_context = f"Targeted feedback:\n{feedback_note}\n" if feedback_note else ""
 
         if benchmark_mode:
-            nl_problem = llm_problem_text(state.context.get("nl_problem") or "")
+            nl_problem = llm_problem_text(
+                state.context.get("nl_problem") or "",
+                preserve_data_generator_contract=True,
+            )
             problem_spec = re.split(
                 r"\nRequired create_model signature:",
                 nl_problem,

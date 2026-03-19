@@ -27,16 +27,21 @@ def runtime_data_note() -> str:
 - support dict-style or attribute-style access"""
 
 
-def llm_problem_text(problem_text: str) -> str:
+def llm_problem_text(
+    problem_text: str,
+    *,
+    preserve_data_generator_contract: bool = False,
+) -> str:
     text = str(problem_text or "").strip()
     if not text:
         return ""
-    text = re.sub(
-        r"\nDataGenerator contract \(source of truth\):\n.*?\n\nRequired create_model signature:\n",
-        "\nRequired create_model signature:\n",
-        text,
-        flags=re.DOTALL,
-    )
+    if not preserve_data_generator_contract:
+        text = re.sub(
+            r"\nDataGenerator contract \(source of truth\):\n.*?\n\nRequired create_model signature:\n",
+            "\nRequired create_model signature:\n",
+            text,
+            flags=re.DOTALL,
+        )
     text = re.sub(
         r"\n\nHard interface requirements:\n(?:- .*(?:\n|$))*",
         "",
@@ -187,6 +192,11 @@ The benchmark contract is authoritative. Return Python code that follows ALL rul
 9. Use deterministic Pyomo construction only; do not derive sets from model component values
 10. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
 11. No markdown fences or explanations
+12. Treat DataGenerator contract types as binding runtime truth
+13. `list[...]` inputs are iterables, not dicts; never call `.keys()/.items()/.values()` on them
+14. Scalar inputs like `int` must never be subscripted
+15. `dict[int, ...]` uses scalar integer keys only; `dict[tuple[int, ...], ...]` uses exact tuple keys only
+16. Do not invent tuple arity from the story; respect the exact key shape shown in the contract
 
 The output is executed directly as a Python module and must be syntactically valid."""
     },

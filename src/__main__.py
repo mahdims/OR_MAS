@@ -105,7 +105,10 @@ async def run_single_agent_generation(
     model_pack.context["generation_mode"] = normalized_mode
 
     system_prompt = PROMPTS["single_agent_create_model"]["system"]
-    llm_problem = llm_problem_text(problem_text)
+    llm_problem = llm_problem_text(
+        problem_text,
+        preserve_data_generator_contract=True,
+    )
 
     trace_token = llm_client.begin_trace()
     try:

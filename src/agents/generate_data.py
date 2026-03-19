@@ -25,7 +25,12 @@ async def generate_data(state: ModelPack) -> ModelPack:
             if feedback_note:
                 feedback_context = f"Targeted feedback:\n{feedback_note}\n"
 
-        nl_problem = llm_problem_text(state.context.get("nl_problem") or "")
+        nl_problem = llm_problem_text(
+            state.context.get("nl_problem") or "",
+            preserve_data_generator_contract=(
+                str(state.context.get("target_interface") or "").strip() == "create_model"
+            ),
+        )
         nl_components_json = (
             state.components_nl.model_dump_json(indent=2)
             if state.components_nl is not None

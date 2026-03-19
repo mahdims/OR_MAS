@@ -20,7 +20,12 @@ async def specify_problem(state: ModelPack) -> ModelPack:
         return state
 
     try:
-        llm_problem = llm_problem_text(nl_problem)
+        llm_problem = llm_problem_text(
+            nl_problem,
+            preserve_data_generator_contract=(
+                str(state.context.get("target_interface") or "").strip() == "create_model"
+            ),
+        )
         input_note = problem_input_note(llm_problem)
         user_prompt = f"""Problem Input:
 {llm_problem}
