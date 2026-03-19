@@ -30,7 +30,7 @@ class NonRetryableLLMError(RuntimeError):
 
 
 DEFAULT_MODEL = "gpt-4.1"
-DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS = 4096
+DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS = 16384
 
 
 def _env_retry_attempts(default: int = 3) -> int:
