@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
 import google.generativeai as genai
+from google.generativeai.types import helper_types
 import instructor
 import structlog
 from dotenv import load_dotenv
@@ -118,6 +119,16 @@ class LLMClient:
             DEFAULT_MAX_LENGTH_RETRIES if max_length_retries is None else max_length_retries
         )
         self.allow_truncated_responses = _env_bool("OPENAI_CLIENT_ALLOW_TRUNCATION", default=False)
+        timeout_seconds = None
+        timeout_raw = os.getenv("OPENAI_CLIENT_TIMEOUT_SECONDS")
+        if timeout_raw:
+            try:
+                parsed_timeout = float(timeout_raw)
+                if parsed_timeout > 0:
+                    timeout_seconds = parsed_timeout
+            except ValueError:
+                timeout_seconds = None
+        self.timeout_seconds = timeout_seconds
 
         # Initialize client based on provider
         if self.provider == "gemini":
@@ -138,20 +149,11 @@ class LLMClient:
                 )
             else:
                 self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("API_KEY")
-            timeout_seconds = None
-            timeout_raw = os.getenv("OPENAI_CLIENT_TIMEOUT_SECONDS")
-            if timeout_raw:
-                try:
-                    parsed_timeout = float(timeout_raw)
-                    if parsed_timeout > 0:
-                        timeout_seconds = parsed_timeout
-                except ValueError:
-                    timeout_seconds = None
             # OpenAI-compatible (OpenAI, DeepSeek, Qwen, local)
             base_client = OpenAI(
                 api_key=self.api_key,
                 base_url=self.base_url,
-                timeout=timeout_seconds,
+                timeout=self.timeout_seconds,
             )
             self.raw_client = base_client
             self.client = instructor.from_openai(base_client, mode=instructor.Mode.JSON)
@@ -472,13 +474,30 @@ class LLMClient:
         ]
 
     @staticmethod
-    def _messages_to_gemini_prompt(messages: List[Dict[str, Any]]) -> str:
-        sections: List[str] = []
+    def _gemini_system_instruction(messages: List[Dict[str, Any]]) -> Optional[str]:
+        if not messages:
+            return None
+        first = messages[0]
+        if str(first.get("role") or "").strip().lower() != "system":
+            return None
+        content = str(first.get("content") or "").strip()
+        return content or None
+
+    @staticmethod
+    def _messages_to_gemini_contents(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        contents: List[Dict[str, Any]] = []
         for message in messages:
-            role = str(message.get("role") or "user").upper()
-            content = str(message.get("content") or "")
-            sections.append(f"{role}:\n{content}")
-        return "\n\n".join(sections)
+            role = str(message.get("role") or "user").strip().lower()
+            if role == "system":
+                continue
+            gemini_role = "model" if role == "assistant" else "user"
+            contents.append(
+                {
+                    "role": gemini_role,
+                    "parts": [str(message.get("content") or "")],
+                }
+            )
+        return contents
 
     def _summarize_calls(self, calls: List[Dict[str, Any]]) -> Dict[str, Any]:
         summary: Dict[str, Any] = {
@@ -642,9 +661,31 @@ class LLMClient:
             request_user_prompt = str(user_prompt or "")
         try:
             if self.provider == "gemini":
-                response = self.raw_client.generate_content(
-                    self._messages_to_gemini_prompt(request_messages),
-                    generation_config=genai.GenerationConfig(temperature=temperature),
+                generation_config_kwargs: Dict[str, Any] = {"temperature": temperature}
+                max_output_tokens = (
+                    self.max_completion_tokens or self.length_retry_max_completion_tokens
+                )
+                if max_output_tokens is not None:
+                    generation_config_kwargs["max_output_tokens"] = max_output_tokens
+                request_options = None
+                if self.timeout_seconds is not None:
+                    request_options = helper_types.RequestOptions(timeout=self.timeout_seconds)
+                gemini_model = genai.GenerativeModel(
+                    self.code_generation_model_name,
+                    system_instruction=self._gemini_system_instruction(request_messages),
+                )
+                gemini_contents = self._messages_to_gemini_contents(request_messages)
+                if not gemini_contents:
+                    raise NonRetryableLLMError("gemini request must include at least one non-system message")
+                prompt_payload: Any = (
+                    gemini_contents[0]["parts"][0]
+                    if len(gemini_contents) == 1 and gemini_contents[0]["role"] == "user"
+                    else gemini_contents
+                )
+                response = gemini_model.generate_content(
+                    prompt_payload,
+                    generation_config=genai.GenerationConfig(**generation_config_kwargs),
+                    request_options=request_options,
                 )
                 code = response.text
                 raw_output_text = code
