@@ -39,6 +39,31 @@ def _function_arg_names(fn_node: ast.FunctionDef) -> List[str]:
     return names
 
 
+def _annotation_base_name(node: Optional[ast.AST]) -> str:
+    if node is None:
+        return ""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Subscript):
+        return _annotation_base_name(node.value)
+    return ""
+
+
+def _dict_arg_names(fn_node: ast.FunctionDef) -> Set[str]:
+    dict_like = {"dict", "Dict", "Mapping", "MutableMapping"}
+    names: Set[str] = set()
+    for arg in (
+        list(fn_node.args.posonlyargs)
+        + list(fn_node.args.args)
+        + list(fn_node.args.kwonlyargs)
+    ):
+        if _annotation_base_name(arg.annotation) in dict_like:
+            names.add(arg.arg)
+    return names
+
+
 def _get_model_aliases(fn_node: ast.FunctionDef) -> Set[str]:
     aliases: Set[str] = set()
     for node in ast.walk(fn_node):
@@ -56,6 +81,33 @@ def _set_initialize_expr(call_node: ast.Call) -> Optional[ast.AST]:
     for keyword in call_node.keywords:
         if keyword.arg == "initialize":
             return keyword.value
+    return None
+
+
+def _iter_executable_nodes(fn_node: ast.FunctionDef):
+    for stmt in fn_node.body:
+        yield from ast.walk(stmt)
+
+
+def _integer_literal_index_repr(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return repr(node.value)
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, (ast.UAdd, ast.USub))
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
+        sign = "-" if isinstance(node.op, ast.USub) else "+"
+        return f"{sign}{node.operand.value!r}"
+    if isinstance(node, ast.Tuple):
+        item_reprs: List[str] = []
+        for elt in node.elts:
+            literal = _integer_literal_index_repr(elt)
+            if literal is None:
+                return None
+            item_reprs.append(literal)
+        return f"({', '.join(item_reprs)})"
     return None
 
 
@@ -89,7 +141,7 @@ def _collect_forbidden_call_diagnostics(fn_node: ast.FunctionDef) -> List[str]:
     forbidden_roots = {"subprocess", "requests", "urllib", "socket", "httpx"}
 
     diagnostics: List[str] = []
-    for node in ast.walk(fn_node):
+    for node in _iter_executable_nodes(fn_node):
         if not isinstance(node, ast.Call):
             continue
         name = _call_name(node.func)
@@ -115,7 +167,7 @@ def _collect_set_init_diagnostics(
         return []
 
     diagnostics: List[str] = []
-    for node in ast.walk(fn_node):
+    for node in _iter_executable_nodes(fn_node):
         if not isinstance(node, ast.Call):
             continue
         if _call_name(node.func) not in {"pyo.Set", "pyomo.environ.Set"}:
@@ -133,6 +185,61 @@ def _collect_set_init_diagnostics(
             if isinstance(subnode, ast.Attribute) and subnode.attr == "value":
                 diagnostics.append("set_initialize_uses_model_component_value")
             break
+    return diagnostics
+
+
+def _collect_dict_literal_subscript_diagnostics(fn_node: ast.FunctionDef) -> List[str]:
+    dict_args = _dict_arg_names(fn_node)
+    if not dict_args:
+        return []
+
+    diagnostics: List[str] = []
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, ast.Subscript):
+            continue
+        if not isinstance(node.value, ast.Name):
+            continue
+        arg_name = node.value.id
+        if arg_name not in dict_args:
+            continue
+        literal_index = _integer_literal_index_repr(node.slice)
+        if literal_index is None:
+            continue
+        diagnostics.append(f"dict_arg_literal_subscript:{arg_name}:{literal_index}")
+    return diagnostics
+
+
+def _collect_dummy_component_diagnostics(
+    fn_node: ast.FunctionDef,
+    model_aliases: Set[str],
+) -> List[str]:
+    if not model_aliases:
+        return []
+
+    diagnostics: List[str] = []
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            if (
+                isinstance(node, ast.Call)
+                and _call_name(node.func) == "setattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in model_aliases
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+                and node.args[1].value.startswith("dummy_")
+            ):
+                diagnostics.append(f"dummy_component_name:{node.args[1].value}")
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if not isinstance(target, ast.Attribute):
+                continue
+            root_name = _attribute_root_name(target)
+            if root_name not in model_aliases:
+                continue
+            if target.attr.startswith("dummy_"):
+                diagnostics.append(f"dummy_component_name:{target.attr}")
     return diagnostics
 
 
@@ -201,6 +308,8 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     model_aliases = _get_model_aliases(fn_node)
     diagnostics.extend(_collect_forbidden_call_diagnostics(fn_node))
     diagnostics.extend(_collect_set_init_diagnostics(fn_node, model_aliases))
+    diagnostics.extend(_collect_dict_literal_subscript_diagnostics(fn_node))
+    diagnostics.extend(_collect_dummy_component_diagnostics(fn_node, model_aliases))
 
     deduped = sorted(set(diagnostics))
     return len(deduped) == 0, deduped
