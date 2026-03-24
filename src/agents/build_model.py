@@ -1,7 +1,7 @@
 # modelpack/agents/build_model.py
 import ast
 import re
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import structlog
 
@@ -11,6 +11,7 @@ from ..prompts import PROMPTS, compact_feedback_context, llm_problem_text, runti
 from .utils import normalize_generation_mode
 
 logger = structlog.get_logger(__name__)
+_DICT_LIKE_ANNOTATIONS = {"dict", "Dict", "Mapping", "MutableMapping"}
 
 
 def _call_name(node: ast.AST) -> str:
@@ -52,16 +53,50 @@ def _annotation_base_name(node: Optional[ast.AST]) -> str:
 
 
 def _dict_arg_names(fn_node: ast.FunctionDef) -> Set[str]:
-    dict_like = {"dict", "Dict", "Mapping", "MutableMapping"}
     names: Set[str] = set()
     for arg in (
         list(fn_node.args.posonlyargs)
         + list(fn_node.args.args)
         + list(fn_node.args.kwonlyargs)
     ):
-        if _annotation_base_name(arg.annotation) in dict_like:
+        if _annotation_base_name(arg.annotation) in _DICT_LIKE_ANNOTATIONS:
             names.add(arg.arg)
     return names
+
+
+def _subscript_args(node: Optional[ast.AST]) -> List[ast.AST]:
+    if not isinstance(node, ast.Subscript):
+        return []
+    if isinstance(node.slice, ast.Tuple):
+        return list(node.slice.elts)
+    return [node.slice]
+
+
+def _dict_annotation_kind(node: Optional[ast.AST]) -> Optional[str]:
+    if _annotation_base_name(node) not in _DICT_LIKE_ANNOTATIONS:
+        return None
+
+    args = _subscript_args(node)
+    key_annotation = args[0] if args else None
+    value_annotation = args[1] if len(args) > 1 else None
+    if _annotation_base_name(key_annotation) in {"tuple", "Tuple"}:
+        return "tuple_dict"
+    if _annotation_base_name(value_annotation) in _DICT_LIKE_ANNOTATIONS:
+        return "nested_dict"
+    return "dict"
+
+
+def _dict_arg_kinds(fn_node: ast.FunctionDef) -> Dict[str, str]:
+    kinds: Dict[str, str] = {}
+    for arg in (
+        list(fn_node.args.posonlyargs)
+        + list(fn_node.args.args)
+        + list(fn_node.args.kwonlyargs)
+    ):
+        kind = _dict_annotation_kind(arg.annotation)
+        if kind:
+            kinds[arg.arg] = kind
+    return kinds
 
 
 def _get_model_aliases(fn_node: ast.FunctionDef) -> Set[str]:
@@ -109,6 +144,116 @@ def _integer_literal_index_repr(node: ast.AST) -> Optional[str]:
             item_reprs.append(literal)
         return f"({', '.join(item_reprs)})"
     return None
+
+
+def _loaded_arg_names(node: ast.AST, arg_names: Set[str]) -> Set[str]:
+    names: Set[str] = set()
+    for subnode in ast.walk(node):
+        if (
+            isinstance(subnode, ast.Name)
+            and isinstance(subnode.ctx, ast.Load)
+            and subnode.id in arg_names
+        ):
+            names.add(subnode.id)
+    return names
+
+
+def _name_tuple_slice(node: ast.AST) -> Optional[Tuple[str, ...]]:
+    if isinstance(node, ast.Name):
+        return (node.id,)
+    if isinstance(node, ast.Tuple):
+        names: List[str] = []
+        for elt in node.elts:
+            if not isinstance(elt, ast.Name):
+                return None
+            names.append(elt.id)
+        return tuple(names)
+    return None
+
+
+def _is_zero_numeric_literal(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return node.value == 0
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, (ast.UAdd, ast.USub))
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, (int, float))
+    ):
+        return node.operand.value == 0
+    return False
+
+
+def _is_name_attr_call(node: ast.AST, arg_name: str, attrs: Set[str]) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if not isinstance(node.func, ast.Attribute) or node.func.attr not in attrs:
+        return False
+    return isinstance(node.func.value, ast.Name) and node.func.value.id == arg_name
+
+
+def _is_subscript_attr_call(node: ast.AST, arg_name: str, attrs: Set[str]) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if not isinstance(node.func, ast.Attribute) or node.func.attr not in attrs:
+        return False
+    base = node.func.value
+    return (
+        isinstance(base, ast.Subscript)
+        and isinstance(base.value, ast.Name)
+        and base.value.id == arg_name
+    )
+
+
+def _has_tuple_support_derivation(fn_node: ast.FunctionDef, arg_name: str) -> bool:
+    for node in _iter_executable_nodes(fn_node):
+        if _is_name_attr_call(node, arg_name, {"keys", "items", "get"}):
+            return True
+        if isinstance(node, ast.For):
+            iter_expr = node.iter
+            if isinstance(iter_expr, ast.Name) and iter_expr.id == arg_name:
+                return True
+            if _is_name_attr_call(iter_expr, arg_name, {"keys", "items"}):
+                return True
+        if isinstance(node, ast.comprehension):
+            iter_expr = node.iter
+            if isinstance(iter_expr, ast.Name) and iter_expr.id == arg_name:
+                return True
+            if _is_name_attr_call(iter_expr, arg_name, {"keys", "items"}):
+                return True
+        if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], ast.In):
+            if (
+                isinstance(node.comparators[0], ast.Name)
+                and node.comparators[0].id == arg_name
+                and isinstance(node.left, ast.Tuple)
+            ):
+                return True
+    return False
+
+
+def _has_nested_support_derivation(fn_node: ast.FunctionDef, arg_name: str) -> bool:
+    for node in _iter_executable_nodes(fn_node):
+        if isinstance(node, ast.For):
+            iter_expr = node.iter
+            if (
+                isinstance(iter_expr, ast.Subscript)
+                and isinstance(iter_expr.value, ast.Name)
+                and iter_expr.value.id == arg_name
+            ):
+                return True
+            if _is_subscript_attr_call(iter_expr, arg_name, {"keys", "items", "values"}):
+                return True
+        if isinstance(node, ast.comprehension):
+            iter_expr = node.iter
+            if (
+                isinstance(iter_expr, ast.Subscript)
+                and isinstance(iter_expr.value, ast.Name)
+                and iter_expr.value.id == arg_name
+            ):
+                return True
+            if _is_subscript_attr_call(iter_expr, arg_name, {"keys", "items", "values"}):
+                return True
+    return False
 
 
 def _collect_forbidden_call_diagnostics(fn_node: ast.FunctionDef) -> List[str]:
@@ -206,6 +351,97 @@ def _collect_dict_literal_subscript_diagnostics(fn_node: ast.FunctionDef) -> Lis
         if literal_index is None:
             continue
         diagnostics.append(f"dict_arg_literal_subscript:{arg_name}:{literal_index}")
+    return diagnostics
+
+
+def _collect_tuple_dict_support_diagnostics(fn_node: ast.FunctionDef) -> List[str]:
+    arg_kinds = _dict_arg_kinds(fn_node)
+    tuple_args = {name for name, kind in arg_kinds.items() if kind == "tuple_dict"}
+    if not tuple_args:
+        return []
+
+    diagnostics: List[str] = []
+    for arg_name in tuple_args:
+        if _has_tuple_support_derivation(fn_node, arg_name):
+            continue
+        for node in _iter_executable_nodes(fn_node):
+            if not isinstance(node, ast.Subscript):
+                continue
+            if not isinstance(node.value, ast.Name) or node.value.id != arg_name:
+                continue
+            index_names = _name_tuple_slice(node.slice)
+            if index_names is None or len(index_names) < 2:
+                continue
+            diagnostics.append(f"tuple_dict_cartesian_access_without_support:{arg_name}")
+            break
+    return diagnostics
+
+
+def _collect_nested_dict_support_diagnostics(fn_node: ast.FunctionDef) -> List[str]:
+    arg_kinds = _dict_arg_kinds(fn_node)
+    nested_args = {name for name, kind in arg_kinds.items() if kind == "nested_dict"}
+    if not nested_args:
+        return []
+
+    diagnostics: List[str] = []
+    for arg_name in nested_args:
+        if _has_nested_support_derivation(fn_node, arg_name):
+            continue
+        for node in _iter_executable_nodes(fn_node):
+            if not isinstance(node, ast.Subscript):
+                continue
+            if not isinstance(node.value, ast.Subscript):
+                continue
+            outer = node.value
+            if not isinstance(outer.value, ast.Name) or outer.value.id != arg_name:
+                continue
+            outer_index = _name_tuple_slice(outer.slice)
+            inner_index = _name_tuple_slice(node.slice)
+            if outer_index is None or inner_index is None:
+                continue
+            diagnostics.append(f"nested_dict_cartesian_access_without_support:{arg_name}")
+            break
+    return diagnostics
+
+
+def _collect_no_effect_arg_diagnostics(
+    fn_node: ast.FunctionDef,
+    arg_names: Set[str],
+) -> List[str]:
+    diagnostics: List[str] = []
+    for node in _iter_executable_nodes(fn_node):
+        if isinstance(node, ast.Assign):
+            value_arg_names = _loaded_arg_names(node.value, arg_names)
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.startswith("_unused"):
+                    for arg_name in value_arg_names:
+                        diagnostics.append(f"no_effect_unused_alias_arg:{arg_name}")
+        elif isinstance(node, ast.AnnAssign):
+            value_arg_names = (
+                _loaded_arg_names(node.value, arg_names) if node.value is not None else set()
+            )
+            if isinstance(node.target, ast.Name) and node.target.id.startswith("_unused"):
+                for arg_name in value_arg_names:
+                    diagnostics.append(f"no_effect_unused_alias_arg:{arg_name}")
+
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            zero_side = None
+            if _is_zero_numeric_literal(node.left):
+                zero_side = node.right
+            elif _is_zero_numeric_literal(node.right):
+                zero_side = node.left
+            if zero_side is not None:
+                for arg_name in _loaded_arg_names(zero_side, arg_names):
+                    diagnostics.append(f"no_effect_zero_multiplier_arg:{arg_name}")
+
+        if (
+            isinstance(node, ast.If)
+            and node.body
+            and all(isinstance(stmt, ast.Pass) for stmt in node.body)
+            and not node.orelse
+        ):
+            for arg_name in _loaded_arg_names(node.test, arg_names):
+                diagnostics.append(f"no_effect_branch_arg:{arg_name}")
     return diagnostics
 
 
@@ -309,6 +545,9 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     diagnostics.extend(_collect_forbidden_call_diagnostics(fn_node))
     diagnostics.extend(_collect_set_init_diagnostics(fn_node, model_aliases))
     diagnostics.extend(_collect_dict_literal_subscript_diagnostics(fn_node))
+    diagnostics.extend(_collect_tuple_dict_support_diagnostics(fn_node))
+    diagnostics.extend(_collect_nested_dict_support_diagnostics(fn_node))
+    diagnostics.extend(_collect_no_effect_arg_diagnostics(fn_node, arg_name_set))
     diagnostics.extend(_collect_dummy_component_diagnostics(fn_node, model_aliases))
 
     deduped = sorted(set(diagnostics))
