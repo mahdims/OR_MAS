@@ -205,6 +205,15 @@ def _is_subscript_attr_call(node: ast.AST, arg_name: str, attrs: Set[str]) -> bo
     )
 
 
+def _uses_synthetic_ranges(fn_node: ast.FunctionDef) -> bool:
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, ast.Call):
+            continue
+        if _call_name(node.func) in {"range", "pyo.RangeSet", "pyomo.environ.RangeSet"}:
+            return True
+    return False
+
+
 def _has_tuple_support_derivation(fn_node: ast.FunctionDef, arg_name: str) -> bool:
     for node in _iter_executable_nodes(fn_node):
         if _is_name_attr_call(node, arg_name, {"keys", "items", "get"}):
@@ -377,6 +386,31 @@ def _collect_tuple_dict_support_diagnostics(fn_node: ast.FunctionDef) -> List[st
     return diagnostics
 
 
+def _collect_tuple_dict_dense_param_initializer_diagnostics(fn_node: ast.FunctionDef) -> List[str]:
+    arg_kinds = _dict_arg_kinds(fn_node)
+    tuple_args = {name for name, kind in arg_kinds.items() if kind == "tuple_dict"}
+    if not tuple_args:
+        return []
+
+    diagnostics: List[str] = []
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, ast.Call):
+            continue
+        if _call_name(node.func) not in {"pyo.Param", "pyomo.environ.Param"}:
+            continue
+        initialize_expr = _set_initialize_expr(node)
+        if initialize_expr is None:
+            continue
+        referenced_args = _loaded_arg_names(initialize_expr, tuple_args)
+        if not referenced_args:
+            continue
+        if len(node.args) < 2:
+            continue
+        for arg_name in sorted(referenced_args):
+            diagnostics.append(f"tuple_dict_dense_param_initializer:{arg_name}")
+    return diagnostics
+
+
 def _collect_nested_dict_support_diagnostics(fn_node: ast.FunctionDef) -> List[str]:
     arg_kinds = _dict_arg_kinds(fn_node)
     nested_args = {name for name, kind in arg_kinds.items() if kind == "nested_dict"}
@@ -400,6 +434,41 @@ def _collect_nested_dict_support_diagnostics(fn_node: ast.FunctionDef) -> List[s
             if outer_index is None or inner_index is None:
                 continue
             diagnostics.append(f"nested_dict_cartesian_access_without_support:{arg_name}")
+            break
+    return diagnostics
+
+
+def _collect_nested_dict_literal_inner_subscript_diagnostics(
+    fn_node: ast.FunctionDef,
+) -> List[str]:
+    if not _uses_synthetic_ranges(fn_node):
+        return []
+
+    arg_kinds = _dict_arg_kinds(fn_node)
+    nested_args = {name for name, kind in arg_kinds.items() if kind == "nested_dict"}
+    if not nested_args:
+        return []
+
+    diagnostics: List[str] = []
+    for arg_name in nested_args:
+        if _has_nested_support_derivation(fn_node, arg_name):
+            continue
+        for node in _iter_executable_nodes(fn_node):
+            if not isinstance(node, ast.Subscript):
+                continue
+            if not isinstance(node.value, ast.Subscript):
+                continue
+            outer = node.value
+            if not isinstance(outer.value, ast.Name) or outer.value.id != arg_name:
+                continue
+            if _name_tuple_slice(outer.slice) is None:
+                continue
+            literal_index = _integer_literal_index_repr(node.slice)
+            if literal_index is None:
+                continue
+            diagnostics.append(
+                f"nested_dict_literal_inner_subscript_without_support:{arg_name}:{literal_index}"
+            )
             break
     return diagnostics
 
@@ -546,7 +615,9 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     diagnostics.extend(_collect_set_init_diagnostics(fn_node, model_aliases))
     diagnostics.extend(_collect_dict_literal_subscript_diagnostics(fn_node))
     diagnostics.extend(_collect_tuple_dict_support_diagnostics(fn_node))
+    diagnostics.extend(_collect_tuple_dict_dense_param_initializer_diagnostics(fn_node))
     diagnostics.extend(_collect_nested_dict_support_diagnostics(fn_node))
+    diagnostics.extend(_collect_nested_dict_literal_inner_subscript_diagnostics(fn_node))
     diagnostics.extend(_collect_no_effect_arg_diagnostics(fn_node, arg_name_set))
     diagnostics.extend(_collect_dummy_component_diagnostics(fn_node, model_aliases))
 
