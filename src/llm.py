@@ -29,7 +29,7 @@ class NonRetryableLLMError(RuntimeError):
     """Raised for deterministic LLM response issues that retries will not fix."""
 
 
-DEFAULT_MODEL = "gpt-4.1"
+DEFAULT_MODEL = "openrouter/openai/gpt-oss-20b"
 DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS = 16384
 
 
