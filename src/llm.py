@@ -3,9 +3,11 @@ import ast
 import json
 import inspect
 import os
+import sys
 import time
 from contextvars import ContextVar, Token
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, TypeVar
 
 import instructor
@@ -15,7 +17,17 @@ from litellm import completion as litellm_completion
 from pydantic import BaseModel
 from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential
 
-load_dotenv()
+REPO_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(REPO_ROOT / ".env")
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from config import (  # noqa: E402
+    DEFAULT_MODEL_FALLBACK,
+    resolve_base_url,
+    resolve_default_model,
+)
+
 logger = structlog.get_logger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
@@ -29,7 +41,7 @@ class NonRetryableLLMError(RuntimeError):
     """Raised for deterministic LLM response issues that retries will not fix."""
 
 
-DEFAULT_MODEL = "openrouter/openai/gpt-oss-20b"
+DEFAULT_MODEL = DEFAULT_MODEL_FALLBACK
 DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS = 16384
 
 
@@ -65,12 +77,12 @@ class LLMClient:
         api_key: str = None,
         base_url: str = None,
     ):
-        configured_model_name = model_name or os.getenv("MODEL_NAME") or os.getenv("DEFAULT_MODEL")
+        configured_model_name = resolve_default_model(model_name)
         self.provider = str(provider or os.getenv("PROVIDER") or "litellm").strip().lower() or "litellm"
         self.model_name = configured_model_name or DEFAULT_MODEL
         self.structured_model_name = os.getenv("STRUCTURED_MODEL_NAME") or self.model_name
         self.code_generation_model_name = os.getenv("CODE_MODEL_NAME") or self.model_name
-        self.base_url = base_url or os.getenv("BASE_URL")
+        self.base_url = resolve_base_url(base_url)
         openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
         self.max_completion_tokens = (
             _env_optional_positive_int("LLM_CLIENT_MAX_COMPLETION_TOKENS")

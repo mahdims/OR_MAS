@@ -2,6 +2,7 @@
 
 import asyncio
 import argparse
+from pathlib import Path
 import structlog
 from dotenv import load_dotenv
 
@@ -11,7 +12,7 @@ from .llm import llm_client
 from .prompts import PROMPTS, llm_problem_text
 from .schemas import CodeBlob, ModelPack
 
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 logger = structlog.get_logger(__name__)
 DEFAULT_GRAPH_VARIANT = "main"
 
