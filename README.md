@@ -23,7 +23,7 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Copy `.env.example` to `.env` and set your API key:
+Copy `.env.example` to `.env` and set the LLM settings there:
 
 ```env
 MODEL_NAME=gpt-4.1
@@ -33,7 +33,13 @@ LLM_CLIENT_TIMEOUT_SECONDS=120
 # CODE_MODEL_NAME=gpt-4.1
 # Optional: OpenRouter / local endpoint
 # BASE_URL=https://openrouter.ai/api/v1
+# Optional provider-specific keys
+# OPENROUTER_API_KEY=
+# GEMINI_API_KEY=
 ```
+
+The OR_MAS client now reads model name, base URL, API key, and provider-specific overrides
+from the repo root `.env`.
 
 ## Usage
 

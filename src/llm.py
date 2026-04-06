@@ -23,9 +23,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from config import (  # noqa: E402
-    DEFAULT_MODEL_FALLBACK,
     resolve_base_url,
     resolve_default_model,
+    resolve_api_key,
+    resolve_openrouter_headers,
+    resolve_provider,
 )
 
 logger = structlog.get_logger(__name__)
@@ -41,7 +43,7 @@ class NonRetryableLLMError(RuntimeError):
     """Raised for deterministic LLM response issues that retries will not fix."""
 
 
-DEFAULT_MODEL = DEFAULT_MODEL_FALLBACK
+DEFAULT_MODEL = resolve_default_model()
 DEFAULT_LENGTH_RETRY_MAX_COMPLETION_TOKENS = 16384
 
 
@@ -78,12 +80,17 @@ class LLMClient:
         base_url: str = None,
     ):
         configured_model_name = resolve_default_model(model_name)
-        self.provider = str(provider or os.getenv("PROVIDER") or "litellm").strip().lower() or "litellm"
+        self.provider = resolve_provider(provider).strip().lower()
         self.model_name = configured_model_name or DEFAULT_MODEL
         self.structured_model_name = os.getenv("STRUCTURED_MODEL_NAME") or self.model_name
         self.code_generation_model_name = os.getenv("CODE_MODEL_NAME") or self.model_name
-        self.base_url = resolve_base_url(base_url)
-        openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        self.base_url = resolve_base_url(base_url, model=self.model_name)
+        self.api_key = resolve_api_key(api_key, model=self.model_name, base_url=self.base_url)
+        self.extra_headers = (
+            resolve_openrouter_headers()
+            if self.base_url and "openrouter.ai" in self.base_url.lower()
+            else None
+        )
         self.max_completion_tokens = (
             _env_optional_positive_int("LLM_CLIENT_MAX_COMPLETION_TOKENS")
             or _env_optional_positive_int("LLM_CLIENT_MAX_TOKENS")
@@ -103,10 +110,6 @@ class LLMClient:
                 timeout_seconds = None
         self.timeout_seconds = timeout_seconds
 
-        if self.base_url and "openrouter.ai" in self.base_url.lower():
-            self.api_key = api_key or openrouter_api_key or os.getenv("API_KEY")
-        else:
-            self.api_key = api_key or os.getenv("API_KEY")
         self.client = instructor.from_litellm(litellm_completion, mode=instructor.Mode.JSON)
 
     def begin_trace(self) -> Token:
@@ -443,6 +446,8 @@ class LLMClient:
             request_kwargs["api_key"] = self.api_key
         if self.base_url:
             request_kwargs["base_url"] = self.base_url
+        if self.extra_headers:
+            request_kwargs["extra_headers"] = dict(self.extra_headers)
         if self.timeout_seconds is not None:
             request_kwargs["timeout"] = self.timeout_seconds
         return request_kwargs
