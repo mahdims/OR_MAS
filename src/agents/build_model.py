@@ -1,6 +1,8 @@
 # modelpack/agents/build_model.py
 import ast
+import builtins
 import re
+import symtable
 from typing import Dict, List, Optional, Set, Tuple
 
 import structlog
@@ -44,6 +46,67 @@ def _function_arg_names(fn_node: ast.FunctionDef) -> List[str]:
     names.extend(arg.arg for arg in fn_node.args.args)
     names.extend(arg.arg for arg in fn_node.args.kwonlyargs)
     return names
+
+
+def _parse_signature_contract_fn(signature_line: str) -> Optional[ast.FunctionDef]:
+    signature = signature_line.strip()
+    if not signature.startswith("def create_model("):
+        return None
+    try:
+        tree = ast.parse(f"{signature}\n    pass\n")
+    except SyntaxError:
+        return None
+    fn_node = next(
+        (node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "create_model"),
+        None,
+    )
+    return fn_node
+
+
+def _apply_required_signature_contract(source: str, signature_line: Optional[str]) -> str:
+    if not signature_line:
+        return source
+    contract_fn = _parse_signature_contract_fn(signature_line)
+    if contract_fn is None:
+        return source
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+    fn_node = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "create_model"
+        ),
+        None,
+    )
+    if fn_node is None:
+        return source
+
+    source_args = list(fn_node.args.posonlyargs) + list(fn_node.args.args) + list(fn_node.args.kwonlyargs)
+    contract_args = (
+        list(contract_fn.args.posonlyargs)
+        + list(contract_fn.args.args)
+        + list(contract_fn.args.kwonlyargs)
+    )
+    if len(source_args) != len(contract_args):
+        return source
+    if [arg.arg for arg in source_args] != [arg.arg for arg in contract_args]:
+        return source
+
+    changed = False
+    for source_arg, contract_arg in zip(source_args, contract_args):
+        if source_arg.annotation is None and contract_arg.annotation is not None:
+            source_arg.annotation = contract_arg.annotation
+            changed = True
+    if fn_node.returns is None and contract_fn.returns is not None:
+        fn_node.returns = contract_fn.returns
+        changed = True
+    if not changed:
+        return source
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree)
 
 
 def _annotation_base_name(node: Optional[ast.AST]) -> str:
@@ -105,6 +168,22 @@ def _dict_arg_kinds(fn_node: ast.FunctionDef) -> Dict[str, str]:
     return kinds
 
 
+def _bool_dict_arg_names(fn_node: ast.FunctionDef) -> Set[str]:
+    names: Set[str] = set()
+    for arg in (
+        list(fn_node.args.posonlyargs)
+        + list(fn_node.args.args)
+        + list(fn_node.args.kwonlyargs)
+    ):
+        if _annotation_base_name(arg.annotation) not in _DICT_LIKE_ANNOTATIONS:
+            continue
+        args = _subscript_args(arg.annotation)
+        value_annotation = args[1] if len(args) > 1 else None
+        if _annotation_base_name(value_annotation) == "bool":
+            names.add(arg.arg)
+    return names
+
+
 def _get_model_aliases(fn_node: ast.FunctionDef) -> Set[str]:
     aliases: Set[str] = set()
     for node in ast.walk(fn_node):
@@ -128,6 +207,14 @@ def _set_initialize_expr(call_node: ast.Call) -> Optional[ast.AST]:
 def _iter_executable_nodes(fn_node: ast.FunctionDef):
     for stmt in fn_node.body:
         yield from ast.walk(stmt)
+
+
+def _parent_map(node: ast.AST) -> Dict[ast.AST, ast.AST]:
+    parents: Dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(node):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    return parents
 
 
 def _integer_literal_index_repr(node: ast.AST) -> Optional[str]:
@@ -600,6 +687,31 @@ def _collect_model_component_alias_diagnostics(
     return diagnostics
 
 
+def _collect_model_raw_arg_aliases(
+    fn_node: ast.FunctionDef,
+    model_aliases: Set[str],
+    arg_names: Set[str],
+) -> Dict[str, str]:
+    if not model_aliases or not arg_names:
+        return {}
+
+    aliases: Dict[str, str] = {}
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Name) or value.id not in arg_names:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if not isinstance(target, ast.Attribute):
+                continue
+            if _attribute_root_name(target) not in model_aliases:
+                continue
+            aliases[target.attr] = value.id
+    return aliases
+
+
 def _infer_model_set_dimensions(
     fn_node: ast.FunctionDef,
     model_aliases: Set[str],
@@ -697,6 +809,54 @@ def _collect_constraint_rule_arity_diagnostics(
     return diagnostics
 
 
+def _is_raw_bool_dict_access(node: ast.AST, raw_bool_attrs: Set[str]) -> bool:
+    if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute):
+        return node.value.attr in raw_bool_attrs
+    if isinstance(node, ast.Call):
+        if (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and isinstance(node.func.value, ast.Attribute)
+        ):
+            return node.func.value.attr in raw_bool_attrs
+    return False
+
+
+def _collect_bool_dict_compare_diagnostics(
+    fn_node: ast.FunctionDef,
+    model_aliases: Set[str],
+) -> List[str]:
+    raw_bool_aliases = _collect_model_raw_arg_aliases(
+        fn_node, model_aliases, _bool_dict_arg_names(fn_node)
+    )
+    if not raw_bool_aliases:
+        return []
+
+    diagnostics: List[str] = []
+    raw_bool_attrs = set(raw_bool_aliases)
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, ast.Compare):
+            continue
+        for expr in [node.left, *node.comparators]:
+            if not _is_raw_bool_dict_access(expr, raw_bool_attrs):
+                continue
+            attr_name: Optional[str] = None
+            if isinstance(expr, ast.Subscript) and isinstance(expr.value, ast.Attribute):
+                attr_name = expr.value.attr
+            elif (
+                isinstance(expr, ast.Call)
+                and isinstance(expr.func, ast.Attribute)
+                and isinstance(expr.func.value, ast.Attribute)
+            ):
+                attr_name = expr.func.value.attr
+            if attr_name is not None:
+                diagnostics.append(
+                    f"bool_dict_compare_without_cast:{raw_bool_aliases[attr_name]}"
+                )
+            break
+    return diagnostics
+
+
 def _has_pyomo_pyo_import(tree: ast.Module) -> bool:
     for node in tree.body:
         if isinstance(node, ast.Import):
@@ -719,8 +879,195 @@ def _uses_pyo_alias(tree: ast.Module) -> bool:
     return False
 
 
-def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
+def _collect_undefined_name_diagnostics(source: str) -> List[str]:
+    try:
+        module_table = symtable.symtable(source, "create_model.py", "exec")
+    except SyntaxError:
+        return []
+
+    create_model_table = next(
+        (
+            child
+            for child in module_table.get_children()
+            if child.get_name() == "create_model" and child.get_type() == "function"
+        ),
+        None,
+    )
+    if create_model_table is None:
+        return []
+
+    allowed_names = {symbol.get_name() for symbol in module_table.get_symbols()}
+    allowed_names.update(dir(builtins))
+
+    diagnostics: Set[str] = set()
+
+    def visit(table: symtable.SymbolTable) -> None:
+        for symbol in table.get_symbols():
+            if not (symbol.is_global() and symbol.is_referenced()):
+                continue
+            if symbol.get_name() in allowed_names:
+                continue
+            diagnostics.add(f"undefined_name:{symbol.get_name()}")
+        for child in table.get_children():
+            visit(child)
+
+    visit(create_model_table)
+    return sorted(diagnostics)
+
+
+def _name_used_only_as_attribute_root(fn_node: ast.FunctionDef, name: str) -> bool:
+    parents = _parent_map(fn_node)
+    seen = False
+    for node in ast.walk(fn_node):
+        if not (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id == name
+        ):
+            continue
+        seen = True
+        parent = parents.get(node)
+        if not (isinstance(parent, ast.Attribute) and parent.value is node):
+            return False
+    return seen
+
+
+def _name_is_loaded(fn_node: ast.FunctionDef, name: str) -> bool:
+    for node in ast.walk(fn_node):
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id == name
+        ):
+            return True
+    return False
+
+
+class _CreateModelAutoFixer(ast.NodeTransformer):
+    def __init__(self, rename_map: Dict[str, str], raw_bool_attrs: Set[str]):
+        self.rename_map = rename_map
+        self.raw_bool_attrs = raw_bool_attrs
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        if isinstance(node.ctx, ast.Load) and node.id in self.rename_map:
+            return ast.copy_location(
+                ast.Name(id=self.rename_map[node.id], ctx=node.ctx),
+                node,
+            )
+        return node
+
+    def visit_Compare(self, node: ast.Compare) -> ast.AST:
+        node = self.generic_visit(node)
+        if _is_raw_bool_dict_access(node.left, self.raw_bool_attrs):
+            node.left = ast.copy_location(
+                ast.Call(func=ast.Name(id="int", ctx=ast.Load()), args=[node.left], keywords=[]),
+                node.left,
+            )
+        node.comparators = [
+            ast.copy_location(
+                ast.Call(func=ast.Name(id="int", ctx=ast.Load()), args=[expr], keywords=[]),
+                expr,
+            )
+            if _is_raw_bool_dict_access(expr, self.raw_bool_attrs)
+            else expr
+            for expr in node.comparators
+        ]
+        return node
+
+
+def _apply_create_model_autofixes(
+    source: str, required_signature: Optional[str] = None
+) -> str:
+    source = _apply_required_signature_contract(source, required_signature)
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return source
+
+    fn_node = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "create_model"
+        ),
+        None,
+    )
+    if fn_node is None:
+        return source
+
+    model_aliases = sorted(_get_model_aliases(fn_node))
+    rename_map: Dict[str, str] = {}
+    if len(model_aliases) == 1:
+        model_alias = model_aliases[0]
+        for diagnostic in _collect_undefined_name_diagnostics(source):
+            _, undefined_name = diagnostic.split(":", maxsplit=1)
+            if _name_used_only_as_attribute_root(fn_node, undefined_name):
+                rename_map[undefined_name] = model_alias
+
+    raw_bool_attr_names = set(
+        _collect_model_raw_arg_aliases(fn_node, set(model_aliases), _bool_dict_arg_names(fn_node))
+    )
+    removed_kwargs = False
+    if fn_node.args.kwarg is not None and not _name_is_loaded(fn_node, fn_node.args.kwarg.arg):
+        fn_node.args.kwarg = None
+        removed_kwargs = True
+
+    needs_import = _uses_pyo_alias(tree) and not _has_pyomo_pyo_import(tree)
+    if not rename_map and not raw_bool_attr_names and not needs_import and not removed_kwargs:
+        return source
+
+    transformed = tree
+    if rename_map or raw_bool_attr_names:
+        transformed = _CreateModelAutoFixer(rename_map, raw_bool_attr_names).visit(transformed)
+        ast.fix_missing_locations(transformed)
+    if needs_import:
+        transformed.body.insert(
+            0,
+            ast.Import(names=[ast.alias(name="pyomo.environ", asname="pyo")]),
+        )
+        ast.fix_missing_locations(transformed)
+    return ast.unparse(transformed)
+
+
+def _diagnostic_repair_hints(diagnostics: List[str]) -> List[str]:
+    hints: List[str] = []
+    for diagnostic in diagnostics:
+        if diagnostic == "missing_pyomo_import_alias_pyo":
+            hints.append("Add `import pyomo.environ as pyo`.")
+        elif diagnostic.startswith("tuple_dict_dense_param_initializer:"):
+            _, arg_name = diagnostic.split(":", maxsplit=1)
+            hints.append(
+                f"`{arg_name}` is sparse tuple-keyed data. Do not build a dense `pyo.Param` for it; access `{arg_name}.get((...), 0)` directly or index from `{arg_name}.keys()`."
+            )
+        elif diagnostic == "set_initialize_references_model_component":
+            hints.append(
+                "Do not initialize a `pyo.Set` from `model.<component>` values. Build the iterable from plain Python data before creating the set."
+            )
+        elif diagnostic.startswith("constraint_rule_arity_mismatch:"):
+            _, rule_name, expected, actual = diagnostic.split(":", maxsplit=3)
+            hints.append(
+                f"`{rule_name}` has the wrong rule signature. Match the number of rule indices to the indexed set dimensions ({expected}, {actual})."
+            )
+        elif diagnostic.startswith("undefined_name:"):
+            _, name = diagnostic.split(":", maxsplit=1)
+            hints.append(
+                f"`{name}` is undefined. Use the actual model alias or function argument consistently."
+            )
+        elif diagnostic.startswith("bool_dict_compare_without_cast:"):
+            _, arg_name = diagnostic.split(":", maxsplit=1)
+            hints.append(
+                f"`{arg_name}` has boolean values. Cast lookup results to `int(...)` or branch on them before using them in Pyomo inequalities."
+            )
+        elif diagnostic == "create_model_kwargs_not_allowed":
+            hints.append("Do not add `**kwargs`; keep the exact required `create_model(...)` signature.")
+    return sorted(set(hints))
+
+
+def _validate_create_model_entrypoint(
+    source: str, required_signature: Optional[str] = None
+) -> Tuple[bool, List[str]]:
     """Validate benchmark-mode code quality for create_model entrypoint."""
+    source = _apply_required_signature_contract(source, required_signature)
     diagnostics: List[str] = []
     try:
         tree = ast.parse(source)
@@ -796,6 +1143,8 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     diagnostics.extend(_collect_dummy_component_diagnostics(fn_node, model_aliases))
     diagnostics.extend(_collect_model_component_alias_diagnostics(fn_node, model_aliases))
     diagnostics.extend(_collect_constraint_rule_arity_diagnostics(fn_node, model_aliases))
+    diagnostics.extend(_collect_bool_dict_compare_diagnostics(fn_node, model_aliases))
+    diagnostics.extend(_collect_undefined_name_diagnostics(source))
 
     deduped = sorted(set(diagnostics))
     return len(deduped) == 0, deduped
@@ -954,19 +1303,30 @@ Math:
                 validate=True,
                 trace_input=trace_input,
             )
-            valid, diagnostics = _validate_create_model_entrypoint(code)
+            code = _apply_create_model_autofixes(code, required_signature=signature_line)
+            valid, diagnostics = _validate_create_model_entrypoint(
+                code, required_signature=signature_line
+            )
             if not valid and generation_mode == "repair_once":
                 repair_iterations = state.tests.setdefault("repair_iterations", {})
                 repair_iterations["build_model_validation"] = (
                     int(repair_iterations.get("build_model_validation") or 0) + 1
                 )
                 diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
+                repair_hints = _diagnostic_repair_hints(diagnostics)
                 repair_sections = [
                     "Repair your previous create_model implementation.",
                     "Keep the same required interface and upstream contract from the earlier messages.",
                     "Validation diagnostics from the previous attempt:",
                     diagnostic_lines,
                 ]
+                if repair_hints:
+                    repair_sections.extend(
+                        [
+                            "Concrete fixes required:",
+                            "\n".join(f"- {item}" for item in repair_hints),
+                        ]
+                    )
                 if feedback_note:
                     repair_sections.extend(
                         [
@@ -1003,8 +1363,11 @@ Math:
                     validate=True,
                     trace_input=repair_trace_input,
                 )
+                repaired_code = _apply_create_model_autofixes(
+                    repaired_code, required_signature=signature_line
+                )
                 repaired_valid, repaired_diagnostics = _validate_create_model_entrypoint(
-                    repaired_code
+                    repaired_code, required_signature=signature_line
                 )
                 if not repaired_valid:
                     joined = ", ".join(repaired_diagnostics)
@@ -1025,7 +1388,10 @@ Math:
             )
 
         if benchmark_mode:
-            valid, diagnostics = _validate_create_model_entrypoint(code)
+            code = _apply_create_model_autofixes(code, required_signature=signature_line)
+            valid, diagnostics = _validate_create_model_entrypoint(
+                code, required_signature=signature_line
+            )
             if not valid:
                 joined = ", ".join(diagnostics)
                 raise ValueError(f"benchmark_create_model_validation_failed: {joined}")
