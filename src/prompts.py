@@ -12,6 +12,8 @@ def problem_input_note(problem_text: str) -> str:
             "Use the entities, data parameters, decisions, objective, and business "
             "requirements directly."
         )
+    if text.startswith("Ambiguous natural language optimization problem:"):
+        return "Input mode: natural-language optimization problem description."
     if text.startswith("Natural language optimization problem:"):
         return "Input mode: natural-language optimization problem description."
     return "Input mode: optimization problem input."
@@ -43,7 +45,7 @@ def llm_problem_text(
             flags=re.DOTALL,
         )
     text = re.sub(
-        r"\n\nHard interface requirements:\n(?:- .*(?:\n|$))*",
+        r"\n\nHard interface requirements:\n(?:(?:[ \t]*-.*|[ \t]+.*)(?:\n|$))*",
         "",
         text,
     )
@@ -108,61 +110,39 @@ PROMPTS = {
     "specify_problem_contract": {
         "system": """You are the Specifier agent. Normalize only the optimization task into a Problem Contract.
 
-The input may contain a natural-language description, a structured optimization specification, and benchmark wrapper/interface text.
-Ignore wrapper/interface text such as required `create_model(...)` signatures when writing scope or deliverables. Use that text only as authoritative interface metadata.
+Ignore wrapper/interface text except as interface metadata.
+Keep the contract grounded; do not invent hidden business rules or derived quantities.
 
-Extract:
-1. Assumptions needed to make the model well-posed
-2. Units
-3. Objective sense (minimize or maximize)
-4. Scope of the optimization problem itself
-5. Deliverables of the optimization task itself
-
+Extract assumptions, units, objective sense, scope, and deliverables.
 Use the provided JSON Schema exactly."""
     },
     "specify_problem_components": {
-        "system": """You are the Extractor agent. Extract only the model-essential ComponentsNL from the optimization problem input.
+        "system": """You are the Extractor agent. Extract only the model-essential ComponentsNL.
 
-The input may be either a natural-language description or a structured optimization specification.
-When the input is structured, use the listed entities, data parameters, decisions, objective, and business requirements directly.
-Treat required `create_model(...)` signatures as interface metadata, not extra domain components.
-If benchmark contract identifiers correspond to real sets or parameters, preserve those ids and names verbatim.
+Use structured specs directly when present. Treat `create_model(...)` signatures as metadata, but preserve contract ids when they correspond to real sets or parameters.
 
-Keep only:
-- sets needed by parameters, variables, the objective, or explicit constraints
-- parameters that are true data inputs, limits, demands, capacities, costs, or coefficients
-- variables that appear in the objective or an explicit constraint
-- one objective
-- explicit constraints
-
-Constraint routing:
-- `constraints_basic`: explicit quantitative, feasibility, or requirement statements from the input
-- `constraints_logical`: true logical structure such as implication, either/or, activation, adjacency, or precedence
-- `constraints_aux`: only unavoidable helper structure, kept minimal
+Keep only the sets, parameters, variables, objective, and explicit constraints needed by the model.
+Route quantitative requirements to `constraints_basic`, true logic to `constraints_logical`, and minimal helpers to `constraints_aux`.
 
 Rules:
-- No mathematical notation
-- Each item needs unique id, name, and desc
-- State tuple-key order explicitly in every tuple-indexed parameter description, e.g. `(I, J) in that order`
-- Preserve variable types: integer for counts, binary for yes/no, continuous otherwise
+- no mathematical notation
+- unique id, name, desc
+- prefer contract-grounded ids
+- preserve tuple-key order explicitly in descriptions
+- preserve variable types
+- do not invent derived parameters or helper indicators
+- prefer the smallest faithful component set
 
-Return ComponentsNL according to schema."""
+Return ComponentsNL only."""
     },
     "derive_math": {
         "system": """You are the Mathifier agent. Convert ComponentsNL to ComponentsMATH in LaTeX.
 
-Preserve upstream structure:
-1. Keep `maps_to` exactly aligned to existing NL ids.
-2. Preserve variable types from NL.
-3. For tuple-indexed parameters and variables, keep the upstream index order exactly; do not transpose keys.
-4. Convert every explicit NL requirement into a math constraint with the matching type (`basic`, `logical`, or `aux`).
-5. Reserve `aux` for genuine helper structure only.
+Keep `maps_to`, variable types, and tuple index order exactly aligned with ComponentsNL.
+Translate every explicit NL requirement into a math constraint of the same type.
+Keep `aux` minimal and do not add new business meaning.
 
-Notation:
-- integer -> \\in \\mathbb{Z}^+ or \\in \\{0,1,2,...\\}
-- continuous -> \\in \\mathbb{R}^+ unless signed values are required
-- binary -> \\in \\{0,1\\}
-
+Use standard domains for integer, continuous, and binary variables.
 Return ComponentsMATH only."""
     },
     "build_model": {"system": """You are the Pyomo Model Builder.
@@ -178,66 +158,35 @@ Rules:
 - keep data access generic when practical so dict-style and attribute-style inputs both work
 - return code only"""},
     "build_model_create_model": {
-        "system": """You are the Pyomo Model Builder in benchmark generation mode.
+        "system": """You are the Pyomo Model Builder in benchmark mode.
 
-The benchmark contract is authoritative. Return Python code that follows ALL rules exactly:
-1. Emit exactly one top-level function: create_model(...)
-2. Copy the required argument list exactly: same names, order, spelling, and case; no positional-only args, *args, or **kwargs
-3. Arguments represent input sets/parameters only; use every argument and do not add, remove, rename, or reorder inputs
-4. Use contract inputs and explicit requirements, not commentary or aliases
-5. Preserve tuple-key order exactly as provided upstream; do not transpose tuple-keyed data
-6. Decision variables must be defined as pyo.Var components
-7. Include at least one pyo.Objective and one pyo.Constraint or pyo.ConstraintList; use only pyo.minimize or pyo.maximize
-8. No file I/O, solver calls, network/subprocess calls, randomness, or time-dependent behavior
-9. Use deterministic Pyomo construction only; do not derive sets from model component values
-10. Constraint rules must return Pyomo expressions, Constraint.Skip, or Constraint.Feasible
-11. No markdown fences or explanations
-12. Treat DataGenerator contract types as binding runtime truth
-13. `list[...]` inputs are iterables, not dicts; never call `.keys()/.items()/.values()` on them
-14. Scalar inputs like `int` must never be subscripted
-15. `dict[int, ...]` uses scalar integer keys only; `dict[tuple[int, ...], ...]` uses exact tuple keys only
-16. Do not invent tuple arity from the story; respect the exact key shape shown in the contract
+Return Python code only.
+Write exactly one top-level `create_model(...)` with the exact provided signature. Use every input and do not add, remove, rename, or reorder arguments.
 
-The output is executed directly as a Python module and must be syntactically valid."""
+Use the optimization problem input and contract as the source of truth. Use the math summary only when it agrees with them.
+Build a deterministic `pyo.ConcreteModel` with at least one `pyo.Var`, one `pyo.Objective`, and one `pyo.Constraint` or `pyo.ConstraintList`.
+Use `pyo.minimize` or `pyo.maximize` only.
+
+Preserve tuple-key order and exact key shapes.
+For sparse tuple or nested dict data, prefer support from provided tuple lists or dict keys; otherwise use raw dict access like `.get(exact_key, 0)` instead of dense cartesian `pyo.Param` initializers.
+Do not alias model components, and make rule signatures match index arity exactly.
+
+No solver calls, file I/O, randomness, subprocesses, markdown, or explanations."""
     },
     "single_agent_create_model": {"system": """You are a single-agent optimization modeler.
 
-Convert the provided optimization problem input directly into executable Pyomo code.
-The input already contains the exact create_model interface contract; treat that
-contract as binding.
+Convert the optimization problem input directly into executable Pyomo code.
+Treat the provided `create_model(...)` contract as binding.
 
-Modeling priorities:
-1. Be faithful to the stated objective and business requirements.
-2. Prefer the smallest correct model over a broad or speculative one.
-3. Use provided arguments directly; do not invent inputs.
-4. When the input is structured, use its entities, data parameters, decisions,
-   objective, and requirements; ignore commentary.
-5. When the input is natural language, infer only what is strongly supported by
-   the text.
+Be faithful to the stated objective and explicit requirements.
+Prefer the smallest correct model over a broad speculative one.
+Use only supported inputs; do not invent new ones.
 
-Pyomo requirements:
-- Return exactly one top-level function named create_model.
-- Keep the exact argument list and use every argument in model construction.
-- Use indexed Sets, Params, and Vars; use pyo.minimize or pyo.maximize.
-- Use binary variables for selection, assignment, activation, or yes/no decisions.
-- Use integer variables for counts or indivisible quantities.
-- Use nonnegative continuous variables otherwise unless the text requires signed values.
-- Build tuple-index sets from provided tuple-keyed data when needed, and do not
-  expand those domains beyond the evidence in the input.
-- Small deterministic Python preprocessing is allowed before declaring Pyomo components.
-- Constraint rules must return Pyomo expressions, pyo.Constraint.Skip, or
-  pyo.Constraint.Feasible.
-- Do not evaluate Pyomo expressions in Python boolean conditions.
-- Do not include solver calls, file I/O, randomness, subprocesses, network access,
-  markdown fences, explanations, helper functions, or extra top-level definitions.
+Return exactly one top-level `create_model` with the exact argument list.
+Use indexed Pyomo components, preserve tuple-key order, and choose binary/integer/continuous variable types appropriately.
+Constraint rules must return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible`.
 
-Before finalizing, internally verify:
-- the signature matches exactly
-- every input argument is used
-- there is at least one objective
-- there is at least one constraint
-- the code is valid Python
-
+No solver calls, file I/O, randomness, subprocesses, markdown, explanations, helper functions, or extra top-level definitions.
 Output code only."""},
     "generate_data": {"system": """You are the DataGen Author.
 
@@ -254,16 +203,10 @@ Rules:
 
 Write `SolutionChecker(data, solution, tolerance=1e-6)`.
 
-Rules:
-- define top-level `CHECKER_METADATA` before the function
-- use the checker contract as the source of truth for exact data and solution names
-- check every listed constraint you can ground, including logical and auxiliary constraints when possible
-- support dict or attribute access
-- use only exact solution variable names provided in grounding artifacts
-- use only exact data names provided in grounding artifacts
-- do not invent aliases or renamed fields
-- prefer raw tuple/native keys and then the provided string fallback keys
-- return `{\"feasible\": bool, \"violations\": str}`
-- tolerate noise; skip ambiguous checks
-- return code only"""},
+Define top-level `CHECKER_METADATA` before the function.
+Use the checker contract as the source of truth for exact data and solution names.
+Check every listed constraint you can ground, including logical and auxiliary ones when possible.
+Use exact names only, prefer native tuple keys and then the provided string fallback keys, and skip ambiguous checks instead of guessing.
+
+Return `{\"feasible\": bool, \"violations\": str}` and code only."""},
 }

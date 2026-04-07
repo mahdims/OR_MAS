@@ -7,7 +7,13 @@ import structlog
 
 from ..schemas import ModelPack, CodeBlob
 from ..llm import llm_client
-from ..prompts import PROMPTS, compact_feedback_context, llm_problem_text, runtime_data_note
+from ..prompts import (
+    PROMPTS,
+    compact_feedback_context,
+    llm_problem_text,
+    problem_input_note,
+    runtime_data_note,
+)
 from .utils import normalize_generation_mode
 
 logger = structlog.get_logger(__name__)
@@ -203,6 +209,20 @@ def _is_subscript_attr_call(node: ast.AST, arg_name: str, attrs: Set[str]) -> bo
         and isinstance(base.value, ast.Name)
         and base.value.id == arg_name
     )
+
+
+def _integer_constant_value(node: Optional[ast.AST]) -> Optional[int]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return int(node.value)
+    if (
+        isinstance(node, ast.UnaryOp)
+        and isinstance(node.op, (ast.UAdd, ast.USub))
+        and isinstance(node.operand, ast.Constant)
+        and isinstance(node.operand.value, int)
+    ):
+        value = int(node.operand.value)
+        return -value if isinstance(node.op, ast.USub) else value
+    return None
 
 
 def _uses_synthetic_ranges(fn_node: ast.FunctionDef) -> bool:
@@ -548,6 +568,157 @@ def _collect_dummy_component_diagnostics(
     return diagnostics
 
 
+def _collect_model_component_alias_diagnostics(
+    fn_node: ast.FunctionDef,
+    model_aliases: Set[str],
+) -> List[str]:
+    if not model_aliases:
+        return []
+
+    diagnostics: List[str] = []
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Attribute):
+            continue
+        value_root = _attribute_root_name(value)
+        if value_root not in model_aliases:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if not isinstance(target, ast.Attribute):
+                continue
+            target_root = _attribute_root_name(target)
+            if target_root not in model_aliases:
+                continue
+            if target.attr == value.attr:
+                continue
+            diagnostics.append(
+                f"model_component_alias_assignment:{target.attr}:{value.attr}"
+            )
+    return diagnostics
+
+
+def _infer_model_set_dimensions(
+    fn_node: ast.FunctionDef,
+    model_aliases: Set[str],
+) -> Dict[str, int]:
+    dimensions: Dict[str, int] = {}
+    if not model_aliases:
+        return dimensions
+
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if not isinstance(value, ast.Call):
+            continue
+        call_name = _call_name(value.func)
+        if call_name not in {
+            "pyo.Set",
+            "pyomo.environ.Set",
+            "pyo.RangeSet",
+            "pyomo.environ.RangeSet",
+        }:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        dim = 1
+        if call_name in {"pyo.Set", "pyomo.environ.Set"}:
+            for keyword in value.keywords:
+                if keyword.arg == "dimen":
+                    literal_dim = _integer_constant_value(keyword.value)
+                    if literal_dim is not None and literal_dim > 0:
+                        dim = literal_dim
+                    break
+        for target in targets:
+            if not isinstance(target, ast.Attribute):
+                continue
+            if _attribute_root_name(target) not in model_aliases:
+                continue
+            dimensions[target.attr] = dim
+    return dimensions
+
+
+def _collect_constraint_rule_arity_diagnostics(
+    fn_node: ast.FunctionDef,
+    model_aliases: Set[str],
+) -> List[str]:
+    if not model_aliases:
+        return []
+
+    set_dimensions = _infer_model_set_dimensions(fn_node, model_aliases)
+    local_rule_arities = {
+        node.name: len(_function_arg_names(node))
+        for node in ast.walk(fn_node)
+        if isinstance(node, ast.FunctionDef) and node is not fn_node
+    }
+    diagnostics: List[str] = []
+
+    for node in _iter_executable_nodes(fn_node):
+        if not isinstance(node, ast.Call):
+            continue
+        if _call_name(node.func) not in {"pyo.Constraint", "pyomo.environ.Constraint"}:
+            continue
+
+        rule_name: Optional[str] = None
+        for keyword in node.keywords:
+            if keyword.arg == "rule" and isinstance(keyword.value, ast.Name):
+                rule_name = keyword.value.id
+                break
+        if not rule_name:
+            continue
+        actual_arity = local_rule_arities.get(rule_name)
+        if actual_arity is None:
+            continue
+
+        expected_index_arity = 0
+        unknown_dimension = False
+        for arg in node.args:
+            if not isinstance(arg, ast.Attribute):
+                unknown_dimension = True
+                break
+            if _attribute_root_name(arg) not in model_aliases:
+                unknown_dimension = True
+                break
+            dim = set_dimensions.get(arg.attr)
+            if dim is None:
+                unknown_dimension = True
+                break
+            expected_index_arity += dim
+        if unknown_dimension:
+            continue
+
+        expected_arity = 1 + expected_index_arity
+        if actual_arity != expected_arity:
+            diagnostics.append(
+                f"constraint_rule_arity_mismatch:{rule_name}:expected{expected_arity}:got{actual_arity}"
+            )
+    return diagnostics
+
+
+def _has_pyomo_pyo_import(tree: ast.Module) -> bool:
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "pyomo.environ" and alias.asname == "pyo":
+                    return True
+        if isinstance(node, ast.ImportFrom):
+            if node.module != "pyomo":
+                continue
+            for alias in node.names:
+                if alias.name == "environ" and alias.asname == "pyo":
+                    return True
+    return False
+
+
+def _uses_pyo_alias(tree: ast.Module) -> bool:
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id == "pyo":
+            return True
+    return False
+
+
 def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     """Validate benchmark-mode code quality for create_model entrypoint."""
     diagnostics: List[str] = []
@@ -559,6 +730,9 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     fn_defs = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
     async_defs = [node for node in tree.body if isinstance(node, ast.AsyncFunctionDef)]
     class_defs = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+
+    if _uses_pyo_alias(tree) and not _has_pyomo_pyo_import(tree):
+        diagnostics.append("missing_pyomo_import_alias_pyo")
 
     if async_defs:
         diagnostics.append("top_level_async_functions_not_allowed")
@@ -620,6 +794,8 @@ def _validate_create_model_entrypoint(source: str) -> Tuple[bool, List[str]]:
     diagnostics.extend(_collect_nested_dict_literal_inner_subscript_diagnostics(fn_node))
     diagnostics.extend(_collect_no_effect_arg_diagnostics(fn_node, arg_name_set))
     diagnostics.extend(_collect_dummy_component_diagnostics(fn_node, model_aliases))
+    diagnostics.extend(_collect_model_component_alias_diagnostics(fn_node, model_aliases))
+    diagnostics.extend(_collect_constraint_rule_arity_diagnostics(fn_node, model_aliases))
 
     deduped = sorted(set(diagnostics))
     return len(deduped) == 0, deduped
@@ -666,12 +842,13 @@ async def build_model(state: ModelPack) -> ModelPack:
             signature_line = (
                 sig_match.group(1) if sig_match else "def create_model(...) -> pyo.ConcreteModel:"
             )
+            problem_input_mode = problem_input_note(problem_spec)
             trace_input = {
                 "agent": "build_model",
                 "mode": "benchmark_create_model",
                 "upstream_artifacts": [
                     {
-                        "label": "problem_specification",
+                        "label": "problem_input",
                         "source": "llm_problem_text(state.context.nl_problem)",
                         "value": problem_spec,
                     },
@@ -696,8 +873,9 @@ async def build_model(state: ModelPack) -> ModelPack:
                     }
                 )
             user_prompt_sections = [
-                "Structured optimization specification:",
+                "Optimization problem input:",
                 problem_spec or "Not available",
+                problem_input_mode,
                 "Required interface:",
                 signature_line,
                 "Mathematical specification (LaTeX):",
@@ -710,7 +888,8 @@ async def build_model(state: ModelPack) -> ModelPack:
                     "Task:",
                     (
                         "Return only the exact create_model implementation. "
-                        "Use only the contract inputs above, preserve tuple-key order, "
+                        "Treat the optimization problem input and interface contract as authoritative, "
+                        "use the math summary only when consistent with them, preserve tuple-key order, "
                         "and do not rename parameters."
                     ),
                 ]
