@@ -7,7 +7,6 @@ from ..llm import llm_client
 from ..prompts import PROMPTS, compact_feedback_context, runtime_data_note
 from .utils import (
     build_checker_contract,
-    build_constraint_catalog,
 )
 
 logger = structlog.get_logger(__name__)
@@ -23,11 +22,6 @@ async def check_solution(state: ModelPack) -> ModelPack:
         return state
 
     try:
-        constraint_catalog = build_constraint_catalog(state.components_nl)
-        constraint_catalog_json = json.dumps(
-            constraint_catalog,
-            indent=2,
-        )
         model_builder_source = (
             state.code.model_builder.source
             if state.code.model_builder and state.code.model_builder.source
@@ -48,11 +42,6 @@ async def check_solution(state: ModelPack) -> ModelPack:
         trace_input = {
             "agent": "check_solution",
             "upstream_artifacts": [
-                {
-                    "label": "constraint_catalog",
-                    "source": "build_constraint_catalog(state.components_nl)",
-                    "value": constraint_catalog,
-                },
                 {
                     "label": "checker_contract",
                     "source": "state.tests.checker_contract",
@@ -115,19 +104,10 @@ async def check_solution(state: ModelPack) -> ModelPack:
             )
 
         user_prompt_sections = [
-            "Constraint catalog:",
-            constraint_catalog_json,
             "Checker contract:",
             json.dumps(checker_contract, indent=2),
             runtime_data_note(),
         ]
-        if model_builder_source:
-            user_prompt_sections.extend(
-                [
-                    "Generated model code to ground exact names against:",
-                    f"```python\n{model_builder_source}\n```",
-                ]
-            )
         if feedback_note:
             user_prompt_sections.extend(["Targeted feedback:", feedback_note])
             evidence = getattr(feedback, "evidence", None)
