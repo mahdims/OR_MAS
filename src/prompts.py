@@ -168,7 +168,13 @@ Build a deterministic `pyo.ConcreteModel` with at least one `pyo.Var`, one `pyo.
 Use `pyo.minimize` or `pyo.maximize` only.
 
 Preserve tuple-key order and exact key shapes.
-For sparse tuple or nested dict data, prefer support from provided tuple lists or dict keys; otherwise use raw dict access like `.get(exact_key, 0)` instead of dense cartesian `pyo.Param` initializers.
+
+CRITICAL — tuple-keyed dict args (`dict[tuple[int,...],...]`):
+- FORBIDDEN: `pyo.Param(set1, set2, ..., initialize=arg_or_fn_using_arg)` with 2+ positional Set args when `initialize` references a tuple-dict arg — this is a dense cartesian initializer that will fail validation.
+- ALLOWED pattern A: derive ONE supporting Set from dict keys, then pass the dict directly — `S = pyo.Set(initialize=list(arg.keys()), dimen=N); model.p = pyo.Param(S, initialize=arg, default=0)`.
+- ALLOWED pattern B: skip the Param entirely — use `arg.get((i, j, ...), 0)` directly inside constraint rule bodies, iterating only over keys known to exist (`for key in arg` or `for key in arg.keys()`).
+- When iterating over cartesian index sets and accessing a tuple-dict, guard each lookup: use `.get(key, 0)` or check `if key in arg` — never assume every combination exists.
+
 Do not alias model components, and make rule signatures match index arity exactly.
 
 No solver calls, file I/O, randomness, subprocesses, markdown, or explanations."""

@@ -1037,7 +1037,10 @@ def _diagnostic_repair_hints(diagnostics: List[str]) -> List[str]:
         elif diagnostic.startswith("tuple_dict_dense_param_initializer:"):
             _, arg_name = diagnostic.split(":", maxsplit=1)
             hints.append(
-                f"`{arg_name}` is sparse tuple-keyed data. Do not build a dense `pyo.Param` for it; access `{arg_name}.get((...), 0)` directly or index from `{arg_name}.keys()`."
+                f"`{arg_name}` is a sparse tuple-keyed dict. "
+                f"NEVER use `pyo.Param(set1, set2, ..., initialize=...)` with multiple positional Set args for it — that is the forbidden dense pattern. "
+                f"Fix with pattern A: `S = pyo.Set(initialize=list({arg_name}.keys()), dimen=N)` then `pyo.Param(S, initialize={arg_name}, default=0)`. "
+                f"Or pattern B: remove the pyo.Param entirely and use `{arg_name}.get((i, j, ...), 0)` directly inside constraint rule bodies."
             )
         elif diagnostic == "set_initialize_references_model_component":
             hints.append(
@@ -1060,6 +1063,23 @@ def _diagnostic_repair_hints(diagnostics: List[str]) -> List[str]:
             )
         elif diagnostic == "create_model_kwargs_not_allowed":
             hints.append("Do not add `**kwargs`; keep the exact required `create_model(...)` signature.")
+        elif diagnostic.startswith("tuple_dict_cartesian_access_without_support:"):
+            _, arg_name = diagnostic.split(":", maxsplit=1)
+            hints.append(
+                f"`{arg_name}` is a sparse tuple-keyed dict. Never use `{arg_name}[i, j, ...]` (direct subscript) when iterating cartesian index sets — it will KeyError on missing keys. "
+                f"Replace every `{arg_name}[(i, j, ...)]` with `{arg_name}.get((i, j, ...), 0)` OR iterate `for key in {arg_name}: ...` / `for key in {arg_name}.keys(): ...` to stay within the dict's actual support."
+            )
+        elif diagnostic.startswith("unused_create_model_arg:"):
+            _, arg_name = diagnostic.split(":", maxsplit=1)
+            hints.append(
+                f"`{arg_name}` is a required argument that is never used in any constraint or objective expression. "
+                f"Use it meaningfully — not as a zero-multiplier or dead alias."
+            )
+        elif diagnostic.startswith("no_effect_zero_multiplier_arg:"):
+            _, arg_name = diagnostic.split(":", maxsplit=1)
+            hints.append(
+                f"`{arg_name}` is multiplied by zero, which has no effect. Use it in an actual constraint or objective expression."
+            )
     return sorted(set(hints))
 
 

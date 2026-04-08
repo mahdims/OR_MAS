@@ -23,19 +23,24 @@ pip install -r requirements.txt
 
 ## Configuration
 
-Copy `.env.example` to `.env` and set the LLM settings there:
+Copy the repo root `.env.example` to the repo root `.env` and set the LLM settings there:
 
 ```env
-MODEL_NAME=gpt-4.1
+MODEL_NAME=openrouter/openai/gpt-5.2
 API_KEY=your-api-key
 LLM_CLIENT_TIMEOUT_SECONDS=120
 # Optional: stronger codegen-specific override
-# CODE_MODEL_NAME=gpt-4.1
+# CODE_MODEL_NAME=openrouter/openai/gpt-5.2
 # Optional: OpenRouter / local endpoint
 # BASE_URL=https://openrouter.ai/api/v1
 # Optional provider-specific keys
 # OPENROUTER_API_KEY=
 # GEMINI_API_KEY=
+# Fastest OpenRouter provider for each model
+# OPENROUTER_PROVIDER_SORT=throughput
+# Optional OpenRouter provider controls
+# OPENROUTER_PROVIDER_ORDER=groq,fireworks
+# OPENROUTER_PROVIDER_ONLY=groq
 ```
 
 The OR_MAS client now reads model name, base URL, API key, and provider-specific overrides

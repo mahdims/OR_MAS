@@ -26,6 +26,7 @@ from config import (  # noqa: E402
     resolve_base_url,
     resolve_default_model,
     resolve_api_key,
+    resolve_openrouter_extra_body,
     resolve_openrouter_headers,
     resolve_provider,
 )
@@ -84,13 +85,8 @@ class LLMClient:
         self.model_name = configured_model_name or DEFAULT_MODEL
         self.structured_model_name = os.getenv("STRUCTURED_MODEL_NAME") or self.model_name
         self.code_generation_model_name = os.getenv("CODE_MODEL_NAME") or self.model_name
-        self.base_url = resolve_base_url(base_url, model=self.model_name)
-        self.api_key = resolve_api_key(api_key, model=self.model_name, base_url=self.base_url)
-        self.extra_headers = (
-            resolve_openrouter_headers()
-            if self.base_url and "openrouter.ai" in self.base_url.lower()
-            else None
-        )
+        self.base_url_override = base_url
+        self.api_key_override = api_key
         self.max_completion_tokens = (
             _env_optional_positive_int("LLM_CLIENT_MAX_COMPLETION_TOKENS")
             or _env_optional_positive_int("LLM_CLIENT_MAX_TOKENS")
@@ -435,6 +431,18 @@ class LLMClient:
         temperature: float,
         max_completion_tokens: Optional[int],
     ) -> Dict[str, Any]:
+        resolved_base_url = resolve_base_url(self.base_url_override, model=model_name)
+        resolved_api_key = resolve_api_key(
+            self.api_key_override,
+            model=model_name,
+            base_url=resolved_base_url,
+        )
+        extra_headers = (
+            resolve_openrouter_headers()
+            if resolved_base_url and "openrouter.ai" in resolved_base_url.lower()
+            else None
+        )
+        extra_body = resolve_openrouter_extra_body(model=model_name, base_url=resolved_base_url)
         request_kwargs: Dict[str, Any] = {
             "model": model_name,
             "messages": messages,
@@ -442,12 +450,14 @@ class LLMClient:
         }
         if max_completion_tokens is not None:
             request_kwargs["max_completion_tokens"] = max_completion_tokens
-        if self.api_key:
-            request_kwargs["api_key"] = self.api_key
-        if self.base_url:
-            request_kwargs["base_url"] = self.base_url
-        if self.extra_headers:
-            request_kwargs["extra_headers"] = dict(self.extra_headers)
+        if resolved_api_key:
+            request_kwargs["api_key"] = resolved_api_key
+        if resolved_base_url:
+            request_kwargs["base_url"] = resolved_base_url
+        if extra_headers:
+            request_kwargs["extra_headers"] = dict(extra_headers)
+        if extra_body:
+            request_kwargs["extra_body"] = dict(extra_body)
         if self.timeout_seconds is not None:
             request_kwargs["timeout"] = self.timeout_seconds
         return request_kwargs
