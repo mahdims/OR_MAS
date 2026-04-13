@@ -357,7 +357,7 @@ async def screen_data(state: ModelPack) -> ModelPack:
                     data_kwargs = _coerce_data_kwargs(data)
                     model = create_model_fn(**data_kwargs)
 
-                results = solver.solve(model, tee=False, timelimit=10)
+                results = solver.solve(model, tee=False, timelimit=60)
 
                 feasible = (
                     results.solver.status == SolverStatus.ok
@@ -391,7 +391,7 @@ async def screen_data(state: ModelPack) -> ModelPack:
         state.tests["retry_counts"][retry_key] = 0
 
         # Check for data issues
-        if infeasible_count > 2:
+        if infeasible_count >= 4:
             if retry_count >= MAX_RETRIES:
                 logger.warning("screen_data_max_retries", retries=retry_count)
                 state.tests["last_feedback"] = None

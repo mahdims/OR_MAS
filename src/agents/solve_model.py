@@ -64,7 +64,7 @@ async def solve_model(state: ModelPack) -> ModelPack:
                         raise TypeError("DataGen output must be dict-like for create_model mode")
                     model = create_model_fn(**data_kwargs)
 
-                results = solver.solve(model, tee=False, timelimit=30)
+                results = solver.solve(model, tee=False, timelimit=120)
 
                 feasible = (
                     results.solver.status == SolverStatus.ok

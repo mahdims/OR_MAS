@@ -342,13 +342,30 @@ async def judge_solution(state: ModelPack) -> ModelPack:
             return state
 
         if positive_mismatches:
-            retry_key = _feedback_retry_key("build_model")
+            # If the model is deterministically correct (no deterministic_positive_failures)
+            # but the checker disagrees, the checker is likely wrong — fix the checker,
+            # not the model.
+            if not deterministic_positive_failures:
+                target = "check_solution"
+                retry_key = _feedback_retry_key("check_solution")
+                proposed_fix = (
+                    "Checker rejects a solver-feasible solution that passes deterministic "
+                    "re-evaluation. The model is likely correct; repair the checker constraints "
+                    "to match the model's actual variable/constraint semantics."
+                )
+            else:
+                target = "build_model"
+                retry_key = _feedback_retry_key("build_model")
+                proposed_fix = (
+                    "Checker is grounded and rejects a solver-feasible solution, so the generated model "
+                    "is likely missing or weakening an NL requirement. Repair the candidate model."
+                )
             retry_count = state.tests.get("retry_counts", {}).get(retry_key, 0)
             if retry_count >= MAX_RETRIES:
                 logger.warning(
                     "judge_solution_max_retries",
                     retries=retry_count,
-                    target_agent="build_model",
+                    target_agent=target,
                 )
                 state.tests["last_feedback"] = None
                 state.tests["retry_counts"][retry_key] = 0
@@ -356,21 +373,19 @@ async def judge_solution(state: ModelPack) -> ModelPack:
                 return state
 
             repair_iterations = state.tests.setdefault("repair_iterations", {})
-            repair_iterations["judge_solution_to_build_model"] = (
-                int(repair_iterations.get("judge_solution_to_build_model") or 0) + 1
+            iteration_key = f"judge_solution_to_{target}"
+            repair_iterations[iteration_key] = (
+                int(repair_iterations.get(iteration_key) or 0) + 1
             )
             feedback = Feedback(
                 source_agent="judge_solution",
-                target_agent="build_model",
+                target_agent=target,
                 issue="model_constraint_mismatch",
                 evidence={
                     **validation_report,
                     "model_code_snippet": state.code.model_builder.source[:4000],
                 },
-                proposed_fix=(
-                    "Checker is grounded and rejects a solver-feasible solution, so the generated model "
-                    "is likely missing or weakening an NL requirement. Repair the candidate model."
-                ),
+                proposed_fix=proposed_fix,
                 retry_count=retry_count,
             )
             state.tests["last_feedback"] = feedback

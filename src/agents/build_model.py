@@ -1183,6 +1183,8 @@ async def build_model(state: ModelPack) -> ModelPack:
 
     try:
         generation_mode = normalize_generation_mode(state.context.get("generation_mode") or "")
+        # Snapshot previous working code before clearing (for quality-gated revert)
+        previous_model_builder = state.code.model_builder
         state.tests["build_model_error"] = None
         state.code.model_builder = None
 
@@ -1433,7 +1435,19 @@ Math:
         )
 
     except Exception as e:
-        state.tests["build_model_error"] = str(e)
-        logger.error("build_model_error", error=str(e))
+        # Quality gate: if feedback-driven regeneration failed but we had
+        # previous working code, revert instead of leaving model_builder empty.
+        if previous_model_builder and previous_model_builder.source and feedback_note:
+            logger.warning(
+                "build_model_revert_to_previous",
+                reason=str(e),
+            )
+            state.code.model_builder = previous_model_builder
+            state.tests["build_model_error"] = None
+            if feedback and feedback.target_agent == "build_model":
+                state.tests["last_feedback"] = None
+        else:
+            state.tests["build_model_error"] = str(e)
+            logger.error("build_model_error", error=str(e))
 
     return state
