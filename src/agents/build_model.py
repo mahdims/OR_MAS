@@ -16,8 +16,6 @@ from ..prompts import (
     problem_input_note,
     runtime_data_note,
 )
-from .utils import normalize_generation_mode
-
 logger = structlog.get_logger(__name__)
 _DICT_LIKE_ANNOTATIONS = {"dict", "Dict", "Mapping", "MutableMapping"}
 
@@ -1182,7 +1180,6 @@ async def build_model(state: ModelPack) -> ModelPack:
         return state
 
     try:
-        generation_mode = normalize_generation_mode(state.context.get("generation_mode") or "")
         # Snapshot previous working code before clearing (for quality-gated revert)
         previous_model_builder = state.code.model_builder
         state.tests["build_model_error"] = None
@@ -1329,7 +1326,7 @@ Math:
             valid, diagnostics = _validate_create_model_entrypoint(
                 code, required_signature=signature_line
             )
-            if not valid and generation_mode == "repair_once":
+            if not valid:
                 repair_iterations = state.tests.setdefault("repair_iterations", {})
                 repair_iterations["build_model_validation"] = (
                     int(repair_iterations.get("build_model_validation") or 0) + 1
@@ -1397,9 +1394,6 @@ Math:
                         "benchmark_create_model_validation_failed_after_repair: " f"{joined}"
                     )
                 code = repaired_code
-            elif not valid:
-                joined = ", ".join(diagnostics)
-                raise ValueError(f"benchmark_create_model_validation_failed: {joined}")
         else:
             code = llm_client.code_generation_call(
                 sys_prompt=system_prompt,
@@ -1431,7 +1425,7 @@ Math:
             "build_model_success",
             code_length=len(code),
             target_interface=target_interface or "default",
-            generation_mode=generation_mode if benchmark_mode else "default",
+            benchmark_create_model=benchmark_mode,
         )
 
     except Exception as e:

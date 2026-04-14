@@ -7,7 +7,6 @@ import structlog
 from dotenv import load_dotenv
 
 from .agents.build_model import _validate_create_model_entrypoint
-from .agents.utils import DEFAULT_GENERATION_MODE, normalize_generation_mode
 from .llm import llm_client
 from .prompts import PROMPTS, llm_problem_text
 from .schemas import CodeBlob, ModelPack
@@ -27,7 +26,6 @@ def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -
 async def run_pipeline(
     problem_text: str,
     target_interface: str = "",
-    generation_mode: str = DEFAULT_GENERATION_MODE,
     graph_variant: str = DEFAULT_GRAPH_VARIANT,
 ) -> ModelPack:
     """Run the full modeling pipeline on a natural language problem."""
@@ -39,7 +37,6 @@ async def run_pipeline(
     target_interface = (target_interface or "").strip()
     if target_interface:
         model_pack.context["target_interface"] = target_interface
-        model_pack.context["generation_mode"] = normalize_generation_mode(generation_mode)
 
     # Create and run app
     from .orchestration.graph import create_app
@@ -63,7 +60,6 @@ async def run_pipeline(
 
 async def run_generation_pipeline(
     problem_text: str,
-    generation_mode: str = DEFAULT_GENERATION_MODE,
 ) -> ModelPack:
     """Run the minimal MAS path and stop after model generation."""
     logger.info("starting_generation_pipeline", problem_length=len(problem_text))
@@ -71,7 +67,6 @@ async def run_generation_pipeline(
     model_pack = ModelPack()
     model_pack.context["nl_problem"] = problem_text
     model_pack.context["target_interface"] = "create_model"
-    model_pack.context["generation_mode"] = normalize_generation_mode(generation_mode)
 
     from .orchestration.graph import create_generation_app
 
@@ -93,7 +88,6 @@ async def run_generation_pipeline(
 
 async def run_single_agent_generation(
     problem_text: str,
-    generation_mode: str = DEFAULT_GENERATION_MODE,
 ) -> ModelPack:
     """Run a direct single-agent create_model baseline on the provided input."""
     logger.info("starting_single_agent_generation", problem_length=len(problem_text))
@@ -101,9 +95,6 @@ async def run_single_agent_generation(
     model_pack = ModelPack()
     model_pack.context["nl_problem"] = problem_text
     model_pack.context["target_interface"] = "create_model"
-
-    normalized_mode = normalize_generation_mode(generation_mode)
-    model_pack.context["generation_mode"] = normalized_mode
 
     system_prompt = PROMPTS["single_agent_create_model"]["system"]
     llm_problem = llm_problem_text(
@@ -131,48 +122,6 @@ async def run_single_agent_generation(
             trace_input=trace_input,
         )
         valid, diagnostics = _validate_create_model_entrypoint(code)
-        if not valid and normalized_mode == "repair_once":
-            repair_iterations = model_pack.tests.setdefault("repair_iterations", {})
-            repair_iterations["single_agent_validation"] = (
-                int(repair_iterations.get("single_agent_validation") or 0) + 1
-            )
-            diagnostic_lines = "\n".join(f"- {item}" for item in diagnostics)
-            repair_prompt = f"""{llm_problem}
-
-Validation diagnostics from the previous attempt:
-{diagnostic_lines}
-
-Previous code to repair:
-```python
-{code}
-```
-
-Return corrected code only."""
-            repair_trace_input = {
-                "agent": "single_agent_create_model",
-                "upstream_artifacts": trace_input["upstream_artifacts"]
-                + [
-                    {
-                        "label": "validation_diagnostics",
-                        "source": "_validate_create_model_entrypoint(previous_code)",
-                        "value": diagnostics,
-                    },
-                    {
-                        "label": "previous_code",
-                        "source": "previous_llm_output",
-                        "value": code,
-                    },
-                ],
-            }
-            code = llm_client.code_generation_call(
-                sys_prompt=system_prompt,
-                user_prompt=repair_prompt,
-                temperature=0.0,
-                validate=True,
-                trace_input=repair_trace_input,
-            )
-            valid, diagnostics = _validate_create_model_entrypoint(code)
-
         if not valid:
             joined = ", ".join(diagnostics)
             raise ValueError(f"single_agent_create_model_validation_failed: {joined}")

@@ -13,16 +13,6 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-DEFAULT_GENERATION_MODE = "repair_once"
-SUPPORTED_GENERATION_MODES: tuple[str, ...] = ("single_pass", "repair_once")
-
-
-def normalize_generation_mode(mode: str) -> str:
-    normalized = str(mode or "").strip().lower()
-    if normalized in SUPPORTED_GENERATION_MODES:
-        return normalized
-    return DEFAULT_GENERATION_MODE
-
 
 def load_module_from_source(name: str, source: str) -> Any:
     """Load Python module from source code string."""
