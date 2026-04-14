@@ -13,7 +13,6 @@ from .schemas import CodeBlob, ModelPack
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 logger = structlog.get_logger(__name__)
-DEFAULT_GRAPH_VARIANT = "main"
 
 
 def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -> None:
@@ -26,7 +25,6 @@ def _attach_llm_trace(model_pack: ModelPack, trace_payload: dict[str, object]) -
 async def run_pipeline(
     problem_text: str,
     target_interface: str = "",
-    graph_variant: str = DEFAULT_GRAPH_VARIANT,
 ) -> ModelPack:
     """Run the full modeling pipeline on a natural language problem."""
     logger.info("starting_pipeline", problem_length=len(problem_text))
@@ -41,7 +39,7 @@ async def run_pipeline(
     # Create and run app
     from .orchestration.graph import create_app
 
-    app = create_app(graph_variant=graph_variant)
+    app = create_app()
     initial_state = {"model_pack": model_pack}
 
     # Execute pipeline
