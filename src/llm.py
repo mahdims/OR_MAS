@@ -3,7 +3,6 @@ import ast
 import json
 import inspect
 import os
-import sys
 import time
 from contextvars import ContextVar, Token
 from datetime import datetime, timezone
@@ -19,8 +18,6 @@ from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wai
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 load_dotenv(REPO_ROOT / ".env")
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from config import (  # noqa: E402
     resolve_base_url,
