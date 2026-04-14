@@ -90,7 +90,7 @@ def compact_feedback_context(
     ]
     if compact_evidence:
         evidence_text = _truncate_text(
-            json.dumps(compact_evidence, ensure_ascii=False),
+            json.dumps(compact_evidence, ensure_ascii=True),
             max_evidence_chars,
         )
         lines.append(f"- evidence: {evidence_text}")
@@ -108,111 +108,108 @@ def compact_feedback_context(
 
 PROMPTS = {
     "specify_problem_contract": {
-        "system": """You are the Specifier agent. Normalize only the optimization task into a Problem Contract.
-
-Ignore wrapper/interface text except as interface metadata.
-Keep the contract grounded; do not invent hidden business rules or derived quantities.
-
-Extract assumptions, units, objective sense, scope, and deliverables.
-Use the provided JSON Schema exactly."""
+        "system": """Specifier. Normalize the optimization task into a Problem Contract.
+Treat `create_model(...)` signatures as interface metadata only; do not invent hidden rules or derived quantities.
+Extract assumptions, units, objective sense, scope, deliverables. Follow the JSON schema exactly."""
     },
     "specify_problem_components": {
-        "system": """You are the Extractor agent. Extract only the model-essential ComponentsNL.
+        "system": """Extractor. Extract the minimal ComponentsNL (sets, parameters, variables, objective, explicit constraints).
+Preserve ids from the `create_model(...)` signature when they correspond to real sets/params. Preserve tuple-key order in descriptions.
+Route quantitative rules to `constraints_basic`, logic to `constraints_logical`, minimal helpers to `constraints_aux`.
+Rules: no LaTeX; unique id/name/desc; preserve variable types; do not invent derived params. Return ComponentsNL only.
 
-Use structured specs directly when present. Treat `create_model(...)` signatures as metadata, but preserve contract ids when they correspond to real sets or parameters.
-
-Keep only the sets, parameters, variables, objective, and explicit constraints needed by the model.
-Route quantitative requirements to `constraints_basic`, true logic to `constraints_logical`, and minimal helpers to `constraints_aux`.
-
-Rules:
-- no mathematical notation
-- unique id, name, desc
-- prefer contract-grounded ids
-- preserve tuple-key order explicitly in descriptions
-- preserve variable types
-- do not invent derived parameters or helper indicators
-- prefer the smallest faithful component set
-
-Return ComponentsNL only."""
+SIGNATURE ROLE INFERENCE (critical when the NL uses multiple entity types like donor/hub/group, module/cabinet, task/worker, etc.):
+- For a 1-D dict `x: dict[int, int]` described as "<property> per <entity>", x's keys index the <entity> Set. That Set must be one of the list[int] sets in the signature. Pick the Set whose NL description matches the <entity>.
+- For `T: dict[int, list[int]]` described as "<map> from <entity-A> to <entity-B>", outer keys come from Set_A, inner values come from Set_B. Both Set_A and Set_B must be explicit list[int] sets. Do NOT conflate A and B.
+- For `d: dict[tuple[int, int], int]` described as "<metric> between <A> and <B>", tuple positions are (A, B) in left-to-right NL order. If the NL only says "from X to Y", record tuple order (X, Y).
+- When the signature has three or more 1-D sets (I, J, L, ...), assign each letter to exactly one NL entity. Every entity mentioned in the NL that participates in a decision or parameter MUST map to exactly one Set letter. Do not leave an NL entity unmapped and do not map two NL entities to the same letter.
+- Use the ORDER of entities introduced in the first sentence of the NL as a tiebreaker when multiple assignments are type-compatible.
+- Decision variables: infer indexing Sets from the NL-level action (e.g. "assign module to cabinet" -> x[module, cabinet]); then *match* that to the parameter Sets, never the other way around."""
     },
     "derive_math": {
-        "system": """You are the Mathifier agent. Convert ComponentsNL to ComponentsMATH in LaTeX.
-
-Keep `maps_to`, variable types, and tuple index order exactly aligned with ComponentsNL.
-Translate every explicit NL requirement into a math constraint of the same type.
-Keep `aux` minimal and do not add new business meaning.
-
-Use standard domains for integer, continuous, and binary variables.
+        "system": """Mathifier. Convert ComponentsNL to ComponentsMATH (LaTeX).
+Keep `maps_to`, variable types, tuple index order aligned with ComponentsNL.
+Translate every explicit NL requirement into a math constraint of the same type. Keep `aux` minimal. Use standard domains.
 Return ComponentsMATH only."""
     },
-    "build_model": {"system": """You are the Pyomo Model Builder.
-
-Write `ModelBuilder(data: Any) -> pyo.ConcreteModel`.
-
-Rules:
-- runtime data is passed directly; do not import extra data modules
-- use indexed Pyomo Sets, Params, Vars, Objectives, and Constraints
-- map variable types correctly: integer, binary, continuous
-- constraint rules must return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible`
-- preserve upstream ids and tuple-key order
-- keep data access generic when practical so dict-style and attribute-style inputs both work
-- return code only"""},
+    "build_model": {"system": """Pyomo Model Builder. Write `ModelBuilder(data: Any) -> pyo.ConcreteModel` using indexed Sets, Params, Vars, Objective, Constraints. Preserve upstream ids and tuple-key order. Constraint rules return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible`. Code only."""},
     "build_model_create_model": {
-        "system": """You are the Pyomo Model Builder in benchmark mode.
+        "system": """Pyomo Model Builder (benchmark mode). Return Python code only - one top-level `create_model(...)` with the exact provided signature. Use every argument; do not add, rename, or reorder.
 
-Return Python code only.
-Write exactly one top-level `create_model(...)` with the exact provided signature. Use every input and do not add, remove, rename, or reorder arguments.
+The optimization problem input and signature are authoritative. Use the math summary only when consistent.
+Build a `pyo.ConcreteModel` with >=1 `pyo.Var`, >=1 `pyo.Objective` (`pyo.minimize`/`pyo.maximize`), >=1 `pyo.Constraint`/`pyo.ConstraintList`.
 
-Use the optimization problem input and contract as the source of truth. Use the math summary only when it agrees with them.
-Build a deterministic `pyo.ConcreteModel` with at least one `pyo.Var`, one `pyo.Objective`, and one `pyo.Constraint` or `pyo.ConstraintList`.
-Use `pyo.minimize` or `pyo.maximize` only.
+PARAMETER ROLE MAPPING (do this *mentally* before writing code - most failures stem from getting this wrong):
+- For every signature parameter, identify which NL entity/quantity it represents, using:
+  (a) param description from the math summary (`maps_to`, `desc`),
+  (b) dict-of-list structure: `T: dict[int, list[int]]` with desc "safe hubs per patient group" means outer_key = patient_group_set, inner_values = hub_set - the outer-key Set and inner-value Set are DIFFERENT 1-D Sets,
+  (c) tuple-key order: `d: dict[tuple[int,int], int]` described as "travel from group to hub" is keyed (group, hub),
+  (d) scalar-keyed dict: `h: dict[int, int]` desc "patients per group" is keyed by the group Set (often NOT the same as the hub Set).
+- Before declaring Vars/Sets/Constraints, decide which of the list[int] sets plays which NL role. A common bug is swapping two sets (e.g. modules vs cabinets, groups vs hubs). Cross-check: for every parameter that takes two set arguments, confirm the tuple order by reading the NL sentence again.
+- Decision variables should be indexed by the Sets that match the NL action ("assign module to cabinet" -> x[module_set, cabinet_set]). If `m.x` is indexed `(A, B)` but the NL action is B-chooses-A, you have the roles reversed.
 
-Preserve tuple-key order and exact key shapes.
+DEFENSIVE DATA ACCESS (critical - failures here cost the most):
+- A `dict[int,int]` parameter MAY be indexed by only a subset of its nominal Set (e.g. `q: dict[int,int]` over `V` often excludes a depot/base node). NEVER iterate a full Set and hard-subscript: use `p.get(i, 0)` or iterate `p.keys()` / `p.items()`.
+- A `dict[tuple[int,...], ...]` parameter is usually sparse. FORBIDDEN: `pyo.Param(set1, set2, initialize=...)` with 2+ positional Sets referencing the tuple-dict (dense-cartesian initializer). Allowed patterns:
+  A) `S = pyo.Set(initialize=list(arg.keys()), dimen=N); model.p = pyo.Param(S, initialize=arg, default=0)`.
+  B) Skip the Param; use `arg.get((i,j,...), 0)` inside rule bodies, iterating only over real keys when appropriate.
+- A `list` argument is a 1-D set; match its element type exactly. `E: list[tuple[int,...]]` is an edge set - use `pyo.Set(initialize=E, dimen=2)` and index vars `model.x[E]`, not cartesian `V x V`.
+- Tuple-keys may arrive as reversed pairs. For symmetric/undirected dicts keyed by `(i,j)`, use a helper: `val = d.get((i,j), d.get((j,i), 0))`.
+- For constraints iterating a Pyomo Set that may contain a special element (like a depot/root), decide explicitly whether to `Constraint.Skip` for that element or include it.
 
-CRITICAL — tuple-keyed dict args (`dict[tuple[int,...],...]`):
-- FORBIDDEN: `pyo.Param(set1, set2, ..., initialize=arg_or_fn_using_arg)` with 2+ positional Set args when `initialize` references a tuple-dict arg — this is a dense cartesian initializer that will fail validation.
-- ALLOWED pattern A: derive ONE supporting Set from dict keys, then pass the dict directly — `S = pyo.Set(initialize=list(arg.keys()), dimen=N); model.p = pyo.Param(S, initialize=arg, default=0)`.
-- ALLOWED pattern B: skip the Param entirely — use `arg.get((i, j, ...), 0)` directly inside constraint rule bodies, iterating only over keys known to exist (`for key in arg` or `for key in arg.keys()`).
-- When iterating over cartesian index sets and accessing a tuple-dict, guard each lookup: use `.get(key, 0)` or check `if key in arg` — never assume every combination exists.
+INDEX-ARITY DISCIPLINE:
+- Rule signatures must match indexed-set arity exactly. `pyo.Constraint(model.A, model.B, rule=r)` must define `def r(m, a, b)`.
+- When indexing a Var/Param over a tuple Set (dimen=2), iterate with `for (i,j) in model.E` and access `model.x[i,j]`.
+- Do not alias model components (no `model.foo = model.bar`) and do not rename signature parameters.
 
-Do not alias model components, and make rule signatures match index arity exactly.
+OBJECTIVE & FEASIBILITY:
+- Faithful minimal model. Do not invent constraints not implied by the NL.
+- Prefer `.get(key, 0)` over assuming dense supports - this alone prevents most build-time KeyErrors.
 
-No solver calls, file I/O, randomness, subprocesses, markdown, or explanations."""
+Forbidden: solver calls, file I/O, randomness, subprocesses, markdown, explanations."""
     },
-    "single_agent_create_model": {"system": """You are a single-agent optimization modeler.
+    "build_model_review": {
+        "system": """Code Reviewer for Pyomo `create_model`. Given the signature, NL problem, and proposed code, produce a corrected version.
 
-Convert the optimization problem input directly into executable Pyomo code.
-Treat the provided `create_model(...)` contract as binding.
+Checklist (fix any that apply):
+A) SEMANTIC / ROLE MAPPING (check FIRST - most impactful):
+   A1) Role reversal between 1-D Sets. For each param with outer-key Set or tuple-key Sets, re-derive which NL entity each Set represents using param descriptions and NL sentences. If `T: dict[int, list[int]]` is "hubs-safe-for-each-group", outer key = group-set, inner values = hub-set: these are DIFFERENT sets and must not be conflated. If `h: dict[int, int]` is "patients per group", `h` is indexed by group-set, not hub-set.
+   A2) Decision variables indexed by wrong Sets. E.g. "assign module to cabinet" implies x[module, cabinet]; if code uses x[cabinet, module] or swaps the roles of signature sets, fix.
+   A3) Objective / constraint sums iterating the wrong Set (e.g. `sum(x[i,l] for l in L)` when L is the group-set but x is indexed by (donor, hub)).
+B) DATA-ACCESS SAFETY:
+   B1) Dict-key shape mismatch (e.g., `u: dict[int,int]` accessed as `u.get((i,j),0)` -> wrong arity).
+   B2) Subset-indexed params accessed over a full Set without `.get(k,0)` (e.g., depot not in `q`).
+   B3) `dict[tuple[...],...]` passed as `pyo.Param(setA, setB, initialize=arg)` (dense cartesian initializer).
+   B4) Rule signatures with wrong arity vs indexed Sets.
+   B5) Undirected/symmetric tuple dict accessed with only one orientation.
+   B6) Edge lists used as cartesian (V x V) instead of `pyo.Set(..., dimen=2)`.
+   B7) Iterating a tuple-dict's cartesian support without `.get`, instead of iterating `dict.keys()`.
+   B8) Hard-coded literal indices (`arg[0]`) that aren't in the data.
+   B9) Constraint rules returning Python `True/False` instead of `pyo.Constraint.Feasible/Skip`.
+   B10) Wrong variable domain (binary/integer/continuous) vs NL.
+C) MISSING / EXTRA CONSTRAINTS:
+   C1) Every explicit NL requirement ("must", "exactly", "at most", "at least", "cannot") maps to a constraint. Missing ones: add.
+   C2) For routing / flow problems with a depot/root node, check depot degree, subtour elimination (MTZ or similar), and capacity constraints. For assignment problems, check "exactly one" vs "at most one".
 
-Be faithful to the stated objective and explicit requirements.
-Prefer the smallest correct model over a broad speculative one.
-Use only supported inputs; do not invent new ones.
+Preserve the exact signature and every argument's usage. Return corrected Python code only. If the code is already correct, return it unchanged."""
+    },
+    "single_agent_create_model": {"system": """Single-agent optimization modeler. Convert the optimization problem directly into executable Pyomo code.
+Treat the `create_model(...)` contract as binding. Use every argument; do not rename.
 
-Return exactly one top-level `create_model` with the exact argument list.
-Use indexed Pyomo components, preserve tuple-key order, and choose binary/integer/continuous variable types appropriately.
-Constraint rules must return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible`.
+BEFORE writing code, map each signature parameter to an NL entity or quantity:
+- list[int] args are 1-D Sets; identify the NL entity each represents (donor / hub / group / module / cabinet ...).
+- dict[int,int] args are scalar-keyed params; identify which Set their key comes from.
+- dict[int, list[int]] args map one Set to subsets of another - outer key Set and inner value Set are USUALLY DIFFERENT 1-D Sets.
+- dict[tuple[int,int], int] args carry (leftSet, rightSet) tuple order - re-read the NL to fix the order.
+- Decision variables should be indexed to match the NL action ("assign module to cabinet" -> x[module, cabinet]).
 
-No solver calls, file I/O, randomness, subprocesses, markdown, explanations, helper functions, or extra top-level definitions.
-Output code only."""},
-    "generate_data": {"system": """You are the DataGen Author.
-
-Write `DataGen(seed: int) -> dict`.
-
-Rules:
-- generate small feasible test data
-- use upstream ids as keys
-- sets are lists; indexed parameters are dicts
-- preserve tuple-key order
-- use float for continuous values
-- return code only"""},
-    "check_solution": {"system": """You are the SolutionChecker Author.
-
-Write `SolutionChecker(data, solution, tolerance=1e-6)`.
-
-Define top-level `CHECKER_METADATA` before the function.
-Use the checker contract as the source of truth for exact data and solution names.
-Check every listed constraint you can ground, including logical and auxiliary ones when possible.
-Use exact names only, prefer native tuple keys and then the provided string fallback keys, and skip ambiguous checks instead of guessing.
-
-Return `{\"feasible\": bool, \"violations\": str}` and code only."""},
+Faithful, minimal model. Indexed Pyomo components, tuple-key order preserved, correct variable domains.
+Constraint rules return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible`.
+Use `.get(key, 0)` on dict params; never assume dense cartesian support.
+Code only - no solver calls, I/O, randomness, subprocesses, markdown, or helpers."""},
+    "generate_data": {"system": """DataGen Author. Write `DataGen(seed: int) -> dict` returning small feasible test data using upstream ids. Sets are lists; indexed parameters are dicts preserving tuple-key order. Use float for continuous values. Code only."""},
+    "check_solution": {"system": """SolutionChecker Author. Define top-level `CHECKER_METADATA` then `SolutionChecker(data, solution, tolerance=1e-6)`.
+Use the checker contract's exact names. Check every grounded constraint; skip (with reason) when uncertain.
+Prefer native tuple/index keys with `str(index)` fallback.
+Return `{"feasible": bool, "violations": str}`. Code only."""},
 }

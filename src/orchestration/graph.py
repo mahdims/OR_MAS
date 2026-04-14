@@ -277,13 +277,19 @@ def _add_linear_edges(graph: StateGraph, node_names: tuple[str, ...]) -> None:
 
 
 def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
+    """Trimmed full graph: specify → derive_math → build_model → generate_data → screen_data → (loop on build err) → END.
+
+    The previous full path included solve/check/judge stages whose feedback rarely converged
+    on the benchmark and added large token cost. For benchmark mode only build_model's output
+    is consumed, so this simplified graph keeps the screen_data smoke-test loop but drops the
+    downstream verification stages.
+    """
     _validate_graph_variant(graph_variant)
 
     graph = StateGraph(GraphState)
-    _add_nodes(graph, FULL_GRAPH_NODES)
+    _add_nodes(graph, GENERATION_PATH + (_node("data"), _node("screen")))
     _add_linear_edges(graph, GENERATION_PATH)
     graph.add_edge(_node("data"), _node("screen"))
-    graph.add_edge(_node("check"), _node("judge"))
 
     graph.add_conditional_edges(
         _node("model"),
@@ -298,24 +304,7 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
         route_after_screen,
         {
             _node("model"): _node("model"),
-            _node("solve"): _node("solve"),
-        },
-    )
-    graph.add_conditional_edges(
-        _node("solve"),
-        route_after_solve,
-        {
-            _node("check"): _node("check"),
-            END_NODE: END,
-        },
-    )
-    graph.add_conditional_edges(
-        _node("judge"),
-        route_after_judge,
-        {
-            _node("model"): _node("model"),
-            _node("check"): _node("check"),
-            END_NODE: END,
+            _node("solve"): END,
         },
     )
 

@@ -1036,7 +1036,7 @@ def _diagnostic_repair_hints(diagnostics: List[str]) -> List[str]:
             _, arg_name = diagnostic.split(":", maxsplit=1)
             hints.append(
                 f"`{arg_name}` is a sparse tuple-keyed dict. "
-                f"NEVER use `pyo.Param(set1, set2, ..., initialize=...)` with multiple positional Set args for it — that is the forbidden dense pattern. "
+                f"NEVER use `pyo.Param(set1, set2, ..., initialize=...)` with multiple positional Set args for it - that is the forbidden dense pattern. "
                 f"Fix with pattern A: `S = pyo.Set(initialize=list({arg_name}.keys()), dimen=N)` then `pyo.Param(S, initialize={arg_name}, default=0)`. "
                 f"Or pattern B: remove the pyo.Param entirely and use `{arg_name}.get((i, j, ...), 0)` directly inside constraint rule bodies."
             )
@@ -1064,14 +1064,14 @@ def _diagnostic_repair_hints(diagnostics: List[str]) -> List[str]:
         elif diagnostic.startswith("tuple_dict_cartesian_access_without_support:"):
             _, arg_name = diagnostic.split(":", maxsplit=1)
             hints.append(
-                f"`{arg_name}` is a sparse tuple-keyed dict. Never use `{arg_name}[i, j, ...]` (direct subscript) when iterating cartesian index sets — it will KeyError on missing keys. "
+                f"`{arg_name}` is a sparse tuple-keyed dict. Never use `{arg_name}[i, j, ...]` (direct subscript) when iterating cartesian index sets - it will KeyError on missing keys. "
                 f"Replace every `{arg_name}[(i, j, ...)]` with `{arg_name}.get((i, j, ...), 0)` OR iterate `for key in {arg_name}: ...` / `for key in {arg_name}.keys(): ...` to stay within the dict's actual support."
             )
         elif diagnostic.startswith("unused_create_model_arg:"):
             _, arg_name = diagnostic.split(":", maxsplit=1)
             hints.append(
                 f"`{arg_name}` is a required argument that is never used in any constraint or objective expression. "
-                f"Use it meaningfully — not as a zero-multiplier or dead alias."
+                f"Use it meaningfully - not as a zero-multiplier or dead alias."
             )
         elif diagnostic.startswith("no_effect_zero_multiplier_arg:"):
             _, arg_name = diagnostic.split(":", maxsplit=1)
@@ -1411,6 +1411,61 @@ Math:
             if not valid:
                 joined = ", ".join(diagnostics)
                 raise ValueError(f"benchmark_create_model_validation_failed: {joined}")
+
+            # Self-review pass: LLM critiques its own code against known failure modes.
+            # Cheap single call that usually catches dict-key shape / subset-index issues
+            # that the static validator does not detect.
+            if not feedback_note:
+                review_prompt = "\n".join(
+                    [
+                        "Optimization problem input:",
+                        problem_spec or "Not available",
+                        "Required interface:",
+                        signature_line,
+                        "Math summary (for parameter/variable descriptions):",
+                        math_spec_json,
+                        "Proposed create_model code:",
+                        "```python",
+                        code,
+                        "```",
+                        "Work through the checklist in ORDER. First verify A1-A3 (role mapping):",
+                        "- re-derive each signature Set's NL identity,",
+                        "- verify every param's tuple/scalar key order matches its NL description,",
+                        "- verify decision variables are indexed by the Sets implied by the NL action.",
+                        "Then verify B1-B10 (data access) and C1-C2 (constraints).",
+                        "If any check fails, return a corrected create_model.",
+                        "If nothing is wrong, return the code unchanged.",
+                        "Return Python code only - no commentary.",
+                    ]
+                )
+                try:
+                    reviewed_code = llm_client.code_generation_call(
+                        sys_prompt=PROMPTS["build_model_review"]["system"],
+                        user_prompt=review_prompt,
+                        temperature=0.0,
+                        validate=True,
+                        trace_input={
+                            "agent": "build_model",
+                            "mode": "self_review",
+                            "upstream_artifacts": [
+                                {"label": "problem_input", "source": "problem_spec", "value": problem_spec},
+                                {"label": "required_interface", "source": "signature_line", "value": signature_line},
+                                {"label": "components_math", "source": "state.components_math", "value": math_spec_json},
+                                {"label": "previous_code", "source": "build_model_first_pass", "value": code},
+                            ],
+                        },
+                    )
+                    reviewed_code = _apply_create_model_autofixes(
+                        reviewed_code, required_signature=signature_line
+                    )
+                    reviewed_valid, _ = _validate_create_model_entrypoint(
+                        reviewed_code, required_signature=signature_line
+                    )
+                    if reviewed_valid and reviewed_code.strip():
+                        code = reviewed_code
+                        logger.info("build_model_self_review_applied")
+                except Exception as review_exc:
+                    logger.warning("build_model_self_review_failed", error=str(review_exc))
 
         state.code.model_builder = CodeBlob(
             language="python",
