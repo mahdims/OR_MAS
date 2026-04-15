@@ -277,37 +277,20 @@ def _add_linear_edges(graph: StateGraph, node_names: tuple[str, ...]) -> None:
 
 
 def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
-    """Trimmed full graph: specify → derive_math → build_model → generate_data → screen_data → (loop on build err) → END.
+    """Minimal full graph: specify → derive_math → build_model → END.
 
-    The previous full path included solve/check/judge stages whose feedback rarely converged
-    on the benchmark and added large token cost. For benchmark mode only build_model's output
-    is consumed, so this simplified graph keeps the screen_data smoke-test loop but drops the
-    downstream verification stages.
+    The generate_data and screen_data smoke-test loop ran against LLM-generated
+    fake data rather than the benchmark's real data_generator, so its feedback
+    loops spent tokens on spurious issues without reliably reducing real-data
+    candidate_solve / checker failures. Only build_model's output is consumed
+    by the benchmark, so we stop after it.
     """
     _validate_graph_variant(graph_variant)
 
     graph = StateGraph(GraphState)
-    _add_nodes(graph, GENERATION_PATH + (_node("data"), _node("screen")))
+    _add_nodes(graph, GENERATION_PATH)
     _add_linear_edges(graph, GENERATION_PATH)
-    graph.add_edge(_node("data"), _node("screen"))
-
-    graph.add_conditional_edges(
-        _node("model"),
-        route_after_model,
-        {
-            _node("data"): _node("data"),
-            END_NODE: END,
-        },
-    )
-    graph.add_conditional_edges(
-        _node("screen"),
-        route_after_screen,
-        {
-            _node("model"): _node("model"),
-            _node("solve"): END,
-        },
-    )
-
+    graph.add_edge(_node("model"), END)
     graph.set_entry_point(_node("specify"))
     return graph
 

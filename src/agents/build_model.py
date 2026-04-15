@@ -1412,41 +1412,35 @@ Math:
                 joined = ", ".join(diagnostics)
                 raise ValueError(f"benchmark_create_model_validation_failed: {joined}")
 
-            # Self-review pass: LLM critiques its own code against known failure modes.
-            # Cheap single call that usually catches dict-key shape / subset-index issues
-            # that the static validator does not detect.
+            # Focused critique pass: one cheap call targeting top real-data failure modes
+            # (set-role reversal, missing NL constraints, dense-cartesian Param on tuple dicts,
+            # sparse-dict .get safety, wrong variable domain). Skipped when regenerating
+            # under targeted feedback to avoid double-correcting.
             if not feedback_note:
-                review_prompt = "\n".join(
+                critique_prompt = "\n".join(
                     [
                         "Optimization problem input:",
                         problem_spec or "Not available",
                         "Required interface:",
                         signature_line,
-                        "Math summary (for parameter/variable descriptions):",
+                        "Math summary:",
                         math_spec_json,
-                        "Proposed create_model code:",
+                        "Proposed create_model:",
                         "```python",
                         code,
                         "```",
-                        "Work through the checklist in ORDER. First verify A1-A3 (role mapping):",
-                        "- re-derive each signature Set's NL identity,",
-                        "- verify every param's tuple/scalar key order matches its NL description,",
-                        "- verify decision variables are indexed by the Sets implied by the NL action.",
-                        "Then verify B1-B10 (data access) and C1-C2 (constraints).",
-                        "If any check fails, return a corrected create_model.",
-                        "If nothing is wrong, return the code unchanged.",
-                        "Return Python code only - no commentary.",
+                        "Return a corrected create_model if any issue applies, else return it unchanged. Code only.",
                     ]
                 )
                 try:
-                    reviewed_code = llm_client.code_generation_call(
-                        sys_prompt=PROMPTS["build_model_review"]["system"],
-                        user_prompt=review_prompt,
+                    critiqued = llm_client.code_generation_call(
+                        sys_prompt=PROMPTS["build_model_critique"]["system"],
+                        user_prompt=critique_prompt,
                         temperature=0.0,
                         validate=True,
                         trace_input={
                             "agent": "build_model",
-                            "mode": "self_review",
+                            "mode": "focused_critique",
                             "upstream_artifacts": [
                                 {"label": "problem_input", "source": "problem_spec", "value": problem_spec},
                                 {"label": "required_interface", "source": "signature_line", "value": signature_line},
@@ -1455,17 +1449,17 @@ Math:
                             ],
                         },
                     )
-                    reviewed_code = _apply_create_model_autofixes(
-                        reviewed_code, required_signature=signature_line
+                    critiqued = _apply_create_model_autofixes(
+                        critiqued, required_signature=signature_line
                     )
-                    reviewed_valid, _ = _validate_create_model_entrypoint(
-                        reviewed_code, required_signature=signature_line
+                    critiqued_valid, _ = _validate_create_model_entrypoint(
+                        critiqued, required_signature=signature_line
                     )
-                    if reviewed_valid and reviewed_code.strip():
-                        code = reviewed_code
-                        logger.info("build_model_self_review_applied")
-                except Exception as review_exc:
-                    logger.warning("build_model_self_review_failed", error=str(review_exc))
+                    if critiqued_valid and critiqued.strip():
+                        code = critiqued
+                        logger.info("build_model_critique_applied")
+                except Exception as critique_exc:
+                    logger.warning("build_model_critique_failed", error=str(critique_exc))
 
         state.code.model_builder = CodeBlob(
             language="python",
