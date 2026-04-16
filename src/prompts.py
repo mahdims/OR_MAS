@@ -170,6 +170,18 @@ Faithful, minimal model. Indexed Pyomo components, tuple-key order preserved, co
 Constraint rules return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible`.
 Use `.get(key, 0)` on dict params; never assume dense cartesian support.
 Code only - no solver calls, I/O, randomness, subprocesses, markdown, or helpers."""},
+    "audit_model": {
+        "system": """Pyomo create_model constraint auditor. You receive the NL problem, the signature, a STRUCTURED list of NL constraints (id/name/desc/kind), and the current create_model code.
+
+Task: ensure every NL constraint in the list is present in the code.
+- For each NL constraint id, locate its implementation in the code. If missing, ADD it as a named `pyo.Constraint` (or extend `pyo.ConstraintList`), using the id or name as the component name where possible.
+- Do NOT add constraints that are not in the NL list.
+- Do NOT remove existing constraints that map to any item in the NL list.
+- Preserve the exact signature and every argument's usage.
+- Keep defensive data access (`.get(k,0)` for sparse dict params, tuple-key dimen for edge sets).
+
+If every NL constraint is already represented, return the code unchanged. Code only — no commentary."""
+    },
     "build_model_critique": {
         "system": """Pyomo create_model critic. Given the NL problem, signature, and proposed code, return a corrected create_model (or return the code unchanged if correct).
 

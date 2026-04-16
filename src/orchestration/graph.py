@@ -6,6 +6,7 @@ from typing import TypedDict
 from langgraph.graph import END, StateGraph
 
 from ..agents import (
+    audit_model,
     build_model,
     check_solution,
     derive_math,
@@ -47,6 +48,7 @@ AGENT_SPECS = (
         build_model.build_model,
         feedback_target="build_model",
     ),
+    AgentSpec("audit", "audit_model", audit_model.audit_model),
     AgentSpec("data", "generate_data", generate_data.generate_data),
     AgentSpec("screen", "screen_data", screen_data.screen_data),
     AgentSpec("solve", "solve_model", solve_model.solve_model),
@@ -276,21 +278,52 @@ def _add_linear_edges(graph: StateGraph, node_names: tuple[str, ...]) -> None:
         graph.add_edge(from_node, to_node)
 
 
-def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
-    """Minimal full graph: specify → derive_math → build_model → END.
+MAX_BUILD_FEEDBACK_RETRIES = 1
 
-    The generate_data and screen_data smoke-test loop ran against LLM-generated
-    fake data rather than the benchmark's real data_generator, so its feedback
-    loops spent tokens on spurious issues without reliably reducing real-data
-    candidate_solve / checker failures. Only build_model's output is consumed
-    by the benchmark, so we stop after it.
-    """
+
+def route_after_build_feedback(state: GraphState) -> str:
+    model_pack = state["model_pack"]
+    build_error = str(model_pack.tests.get("build_model_error") or "").strip()
+    model_builder = getattr(model_pack.code, "model_builder", None)
+    repair_iterations = model_pack.tests.setdefault("repair_iterations", {})
+    retries = int(repair_iterations.get("build_model_feedback") or 0)
+
+    needs_retry = (model_builder is None) or bool(build_error)
+    if needs_retry and retries < MAX_BUILD_FEEDBACK_RETRIES:
+        repair_iterations["build_model_feedback"] = retries + 1
+        model_pack.tests["build_model_retry_reason"] = build_error or "model_builder_missing"
+        return _route(
+            state,
+            from_node=_node("model"),
+            to_node=_node("math"),
+            reason={
+                "reason": "build_model_failed_retry_math",
+                "error": build_error or "model_builder_missing",
+                "retry": retries + 1,
+            },
+        )
+
+    return _route(
+        state,
+        from_node=_node("model"),
+        to_node=END_NODE,
+        reason={"reason": "build_model_done", "error": build_error or None},
+    )
+
+
+def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
+    """V5: specify → derive_math → build_model → (feedback → derive_math | END)."""
     _validate_graph_variant(graph_variant)
 
     graph = StateGraph(GraphState)
     _add_nodes(graph, GENERATION_PATH)
-    _add_linear_edges(graph, GENERATION_PATH)
-    graph.add_edge(_node("model"), END)
+    graph.add_edge(_node("specify"), _node("math"))
+    graph.add_edge(_node("math"), _node("model"))
+    graph.add_conditional_edges(
+        _node("model"),
+        route_after_build_feedback,
+        {_node("math"): _node("math"), END_NODE: END},
+    )
     graph.set_entry_point(_node("specify"))
     return graph
 

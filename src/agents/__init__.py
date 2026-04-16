@@ -1,4 +1,5 @@
 # modelpack/agents/__init__.py
+from . import audit_model
 from . import build_model
 from . import check_solution
 from . import derive_math
@@ -9,6 +10,7 @@ from . import solve_model
 from . import specify_problem
 
 __all__ = [
+    "audit_model",
     "build_model",
     "check_solution",
     "derive_math",

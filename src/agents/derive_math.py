@@ -20,11 +20,20 @@ async def derive_math(state: ModelPack) -> ModelPack:
     try:
         nl_components_json = state.components_nl.model_dump_json(indent=2)
         objective_sense = state.context.get("objective_sense", "minimize")
+        retry_reason = str(state.tests.get("build_model_retry_reason") or "").strip()
+        feedback_block = ""
+        if retry_reason:
+            feedback_block = (
+                "\nPrevious build_model attempt failed with:\n"
+                f"{retry_reason}\n"
+                "Revise the math formulation (indices, tuple order, domains, constraint "
+                "expressions) to remove the cause of this failure. Stay faithful to the NL.\n"
+            )
         user_prompt = f"""Natural Language Components:
 {nl_components_json}
 
 Objective Sense: {objective_sense}
-
+{feedback_block}
 Convert to mathematical notation in LaTeX.
 Preserve upstream ids via maps_to and preserve tuple/index order exactly as described in the NL components.
 Map every explicit NL requirement to a math constraint. Stay compact and non-speculative."""
