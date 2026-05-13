@@ -56,34 +56,6 @@ async def run_pipeline(
     return result["model_pack"]
 
 
-async def run_generation_pipeline(
-    problem_text: str,
-) -> ModelPack:
-    """Run the minimal MAS path and stop after model generation."""
-    logger.info("starting_generation_pipeline", problem_length=len(problem_text))
-
-    model_pack = ModelPack()
-    model_pack.context["nl_problem"] = problem_text
-    model_pack.context["target_interface"] = "create_model"
-
-    from .orchestration.graph import create_generation_app
-
-    app = create_generation_app()
-    initial_state = {"model_pack": model_pack}
-
-    trace_token = llm_client.begin_trace()
-    result = None
-    try:
-        result = await app.ainvoke(initial_state)
-    finally:
-        trace_payload = llm_client.end_trace(trace_token)
-        target_model_pack = result["model_pack"] if result is not None else model_pack
-        _attach_llm_trace(target_model_pack, trace_payload)
-
-    logger.info("generation_pipeline_complete", status=result["model_pack"].status)
-    return result["model_pack"]
-
-
 async def run_single_agent_generation(
     problem_text: str,
 ) -> ModelPack:

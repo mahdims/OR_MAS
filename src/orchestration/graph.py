@@ -123,6 +123,17 @@ async def _run_agent(
         llm_call_sequences=llm_sequences,
         status=model_pack.status,
     )
+    if label == _node("model"):
+        paired_outputs = model_pack.tests.setdefault("paired_outputs", {})
+        if isinstance(paired_outputs, dict) and "generation" not in paired_outputs:
+            build_error = str(model_pack.tests.get("build_model_error") or "").strip() or None
+            model_builder = getattr(model_pack.code, "model_builder", None)
+            source = str(getattr(model_builder, "source", "") or "").strip()
+            paired_outputs["generation"] = {
+                "candidate_source": source or None,
+                "generation_error": build_error,
+                "llm_trace_end_sequence": after,
+            }
     state["model_pack"] = model_pack
     return state
 
@@ -273,11 +284,6 @@ def _add_nodes(graph: StateGraph, node_names: tuple[str, ...]) -> None:
         graph.add_node(node_name, RUNNERS[node_name])
 
 
-def _add_linear_edges(graph: StateGraph, node_names: tuple[str, ...]) -> None:
-    for from_node, to_node in zip(node_names, node_names[1:]):
-        graph.add_edge(from_node, to_node)
-
-
 MAX_BUILD_FEEDBACK_RETRIES = 1
 
 
@@ -328,20 +334,6 @@ def create_graph(graph_variant: str = MAIN_FULL_GRAPH_VARIANT) -> StateGraph:
     return graph
 
 
-def create_generation_graph() -> StateGraph:
-    graph = StateGraph(GraphState)
-    _add_nodes(graph, GENERATION_PATH)
-    _add_linear_edges(graph, GENERATION_PATH)
-    graph.add_edge(_node("model"), END)
-    graph.set_entry_point(_node("specify"))
-    return graph
-
-
 def create_app(graph_variant: str = MAIN_FULL_GRAPH_VARIANT):
     graph = create_graph(graph_variant=graph_variant)
-    return graph.compile()
-
-
-def create_generation_app():
-    graph = create_generation_graph()
     return graph.compile()
