@@ -1197,7 +1197,7 @@ async def build_model(state: ModelPack) -> ModelPack:
                 state.context.get("nl_problem") or "",
                 preserve_data_generator_contract=True,
             )
-            problem_spec = re.split(
+            problem_input = re.split(
                 r"\nRequired create_model signature:",
                 nl_problem,
                 maxsplit=1,
@@ -1210,7 +1210,7 @@ async def build_model(state: ModelPack) -> ModelPack:
             signature_line = (
                 sig_match.group(1) if sig_match else "def create_model(...) -> pyo.ConcreteModel:"
             )
-            problem_input_mode = problem_input_note(problem_spec)
+            problem_input_mode = problem_input_note(problem_input)
             trace_input = {
                 "agent": "build_model",
                 "mode": "benchmark_create_model",
@@ -1218,7 +1218,7 @@ async def build_model(state: ModelPack) -> ModelPack:
                     {
                         "label": "problem_input",
                         "source": "llm_problem_text(state.context.nl_problem)",
-                        "value": problem_spec,
+                        "value": problem_input,
                     },
                     {
                         "label": "required_interface",
@@ -1242,7 +1242,7 @@ async def build_model(state: ModelPack) -> ModelPack:
                 )
             user_prompt_sections = [
                 "Optimization problem input:",
-                problem_spec or "Not available",
+                problem_input or "Not available",
                 problem_input_mode,
                 "Required interface:",
                 signature_line,
@@ -1420,7 +1420,7 @@ Math:
                 critique_prompt = "\n".join(
                     [
                         "Optimization problem input:",
-                        problem_spec or "Not available",
+                        problem_input or "Not available",
                         "Required interface:",
                         signature_line,
                         "Math summary:",
@@ -1442,7 +1442,7 @@ Math:
                             "agent": "build_model",
                             "mode": "focused_critique",
                             "upstream_artifacts": [
-                                {"label": "problem_input", "source": "problem_spec", "value": problem_spec},
+                                {"label": "problem_input", "source": "problem_input", "value": problem_input},
                                 {"label": "required_interface", "source": "signature_line", "value": signature_line},
                                 {"label": "components_math", "source": "state.components_math", "value": math_spec_json},
                                 {"label": "previous_code", "source": "build_model_first_pass", "value": code},

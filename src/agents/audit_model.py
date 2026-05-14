@@ -63,13 +63,13 @@ async def audit_model(state: ModelPack) -> ModelPack:
         state.context.get("nl_problem") or "",
         preserve_data_generator_contract=True,
     )
-    problem_spec = re.split(r"\nRequired create_model signature:", nl_problem, maxsplit=1)[0].strip()
+    problem_input = re.split(r"\nRequired create_model signature:", nl_problem, maxsplit=1)[0].strip()
     signature_line = _extract_signature_line(nl_problem)
 
     user_prompt = "\n".join(
         [
             "Optimization problem input:",
-            problem_spec or "Not available",
+            problem_input or "Not available",
             "Required interface:",
             signature_line,
             "Structured NL constraints (id / name / desc / kind):",
@@ -85,7 +85,7 @@ async def audit_model(state: ModelPack) -> ModelPack:
     trace_input = {
         "agent": "audit_model",
         "upstream_artifacts": [
-            {"label": "problem_input", "source": "problem_spec", "value": problem_spec},
+            {"label": "problem_input", "source": "problem_input", "value": problem_input},
             {"label": "required_interface", "source": "signature_line", "value": signature_line},
             {"label": "nl_constraints", "source": "components_nl", "value": nl_constraints},
             {"label": "previous_code", "source": "state.code.model_builder", "value": code},

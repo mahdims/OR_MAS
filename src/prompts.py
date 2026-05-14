@@ -6,12 +6,6 @@ from typing import Any
 
 def problem_input_note(problem_text: str) -> str:
     text = str(problem_text or "").lstrip()
-    if text.startswith("Structured optimization problem specification:"):
-        return (
-            "Input mode: structured optimization specification.\n"
-            "Use the entities, data parameters, decisions, objective, and business "
-            "requirements directly."
-        )
     if text.startswith("Ambiguous natural language optimization problem:"):
         return "Input mode: natural-language optimization problem description."
     if text.startswith("Natural language optimization problem:"):
