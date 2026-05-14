@@ -43,6 +43,11 @@ def llm_problem_text(
         "",
         text,
     )
+    text = re.sub(
+        r"\n+Output requirements:\n(?:(?:[ \t]*-.*|[ \t]+.*)(?:\n|$))*",
+        "",
+        text,
+    )
     return text.strip()
 
 
@@ -128,27 +133,16 @@ Return ComponentsMATH only."""
     },
     "build_model": {"system": """Pyomo Model Builder. Write `ModelBuilder(data: Any) -> pyo.ConcreteModel` using indexed Sets, Params, Vars, Objective, Constraints. Preserve upstream ids and tuple-key order. Constraint rules return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible`. Code only."""},
     "build_model_create_model": {
-        "system": """Pyomo Model Builder (benchmark). Return Python code only: one top-level `create_model(...)` with the exact provided signature. Use every argument; do not rename or reorder.
+        "system": """Pyomo Model Builder (benchmark). Return Python code only: one top-level `create_model(...)` with the exact provided signature. Do not rename or reorder arguments.
 
-Problem input and signature are authoritative; math summary is advisory. Build a `pyo.ConcreteModel` with >=1 Var, >=1 Objective (`pyo.minimize`/`pyo.maximize`), >=1 Constraint.
+Problem input and signature are authoritative. Build the smallest faithful `pyo.ConcreteModel`.
 
-Parameter role mapping (do first):
-- Identify which NL entity each list[int] Set represents. Different NL entities must map to different Sets.
-- dict[int, list[int]] "B per A" — outer key is Set_A, inner values are Set_B (different Sets).
-- dict[tuple[int,int], ...] — tuple order comes from the NL ("from X to Y" -> (X,Y)); re-read the sentence.
-- dict[int, int] "x per A" — keyed by Set_A (which may differ from other Sets in the signature).
-- Decision vars indexed by Sets implied by NL action ("assign M to C" -> x[M, C]); don't reverse.
-
-Defensive data access:
-- Use `.get(key, 0)` on dict params; some dicts are sparse over their nominal Set (e.g. depot excluded).
-- For `dict[tuple,...]`: build `S=pyo.Set(initialize=list(d.keys()), dimen=N); pyo.Param(S, initialize=d, default=0)`, OR skip the Param and use `d.get((i,j), 0)` inside rules. Never `pyo.Param(setA, setB, initialize=d)` (dense cartesian).
-- `list[tuple[int,...]]` is an edge set: `pyo.Set(initialize=E, dimen=2)`, index vars `model.x[E]`, not V×V.
-- For symmetric/undirected tuple dicts: `d.get((i,j), d.get((j,i), 0))`.
-- Constraint rule arity must match indexed-Set arity. `pyo.Constraint(model.A, model.B, rule=r)` -> `def r(m, a, b)`.
-- Rules return Pyomo expressions, `pyo.Constraint.Skip`, or `pyo.Constraint.Feasible` — never Python True/False.
-- Match variable domain (binary/integer/continuous) to NL.
-
-Faithful minimal model. Forbidden: solver calls, I/O, randomness, subprocesses, markdown, commentary."""
+Rules:
+- Map each signature argument to its problem role; use arguments meaningfully, never as dummy zero terms.
+- Preserve tuple-key order and index variables by the NL action.
+- Treat dict inputs as sparse. Use `.get(key, 0)` or key-derived Sets for tuple dicts; never dense cartesian `pyo.Param(..., initialize=tuple_dict)`.
+- Constraint rule arity must match indexed Set arity, and rules must return Pyomo expressions, `Constraint.Skip`, or `Constraint.Feasible`, never Python bools.
+- Match variable domains to the NL. No solver calls, I/O, randomness, subprocesses, markdown, or commentary."""
     },
     "single_agent_create_model": {"system": """Single-agent optimization modeler. Convert the optimization problem directly into executable Pyomo code.
 Treat the `create_model(...)` contract as binding. Use every argument; do not rename.

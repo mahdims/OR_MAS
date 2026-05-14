@@ -13,7 +13,6 @@ from ..prompts import (
     PROMPTS,
     compact_feedback_context,
     llm_problem_text,
-    problem_input_note,
     runtime_data_note,
 )
 logger = structlog.get_logger(__name__)
@@ -1202,7 +1201,6 @@ async def build_model(state: ModelPack) -> ModelPack:
                 nl_problem,
                 maxsplit=1,
             )[0].strip()
-            math_spec_json = state.components_math.model_dump_json(indent=2)
 
             sig_match = re.search(
                 r"(def create_model\([^)]*\)\s*->\s*pyo\.ConcreteModel:)", nl_problem
@@ -1210,7 +1208,6 @@ async def build_model(state: ModelPack) -> ModelPack:
             signature_line = (
                 sig_match.group(1) if sig_match else "def create_model(...) -> pyo.ConcreteModel:"
             )
-            problem_input_mode = problem_input_note(problem_input)
             trace_input = {
                 "agent": "build_model",
                 "mode": "benchmark_create_model",
@@ -1225,11 +1222,6 @@ async def build_model(state: ModelPack) -> ModelPack:
                         "source": "llm_problem_text(state.context.nl_problem)",
                         "value": signature_line,
                     },
-                    {
-                        "label": "components_math",
-                        "source": "state.components_math",
-                        "value": math_spec_json,
-                    },
                 ],
             }
             if feedback_note:
@@ -1243,11 +1235,8 @@ async def build_model(state: ModelPack) -> ModelPack:
             user_prompt_sections = [
                 "Optimization problem input:",
                 problem_input or "Not available",
-                problem_input_mode,
                 "Required interface:",
                 signature_line,
-                "Mathematical specification (LaTeX):",
-                math_spec_json,
             ]
             if feedback_note:
                 user_prompt_sections.extend(["Targeted feedback:", feedback_note])
@@ -1257,8 +1246,7 @@ async def build_model(state: ModelPack) -> ModelPack:
                     (
                         "Return only the exact create_model implementation. "
                         "Treat the optimization problem input and interface contract as authoritative, "
-                        "use the math summary only when consistent with them, preserve tuple-key order, "
-                        "and do not rename parameters."
+                        "preserve tuple-key order, and do not rename parameters."
                     ),
                 ]
             )
@@ -1423,8 +1411,6 @@ Math:
                         problem_input or "Not available",
                         "Required interface:",
                         signature_line,
-                        "Math summary:",
-                        math_spec_json,
                         "Proposed create_model:",
                         "```python",
                         code,
@@ -1444,7 +1430,6 @@ Math:
                             "upstream_artifacts": [
                                 {"label": "problem_input", "source": "problem_input", "value": problem_input},
                                 {"label": "required_interface", "source": "signature_line", "value": signature_line},
-                                {"label": "components_math", "source": "state.components_math", "value": math_spec_json},
                                 {"label": "previous_code", "source": "build_model_first_pass", "value": code},
                             ],
                         },
