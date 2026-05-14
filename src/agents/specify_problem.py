@@ -53,11 +53,6 @@ Produce both:
                     "source": "llm_problem_text(state.context.nl_problem)",
                     "value": llm_problem,
                 },
-                {
-                    "label": "problem_input_note",
-                    "source": "problem_input_note(llm_problem)",
-                    "value": input_note,
-                },
             ],
         }
 
