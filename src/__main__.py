@@ -6,7 +6,10 @@ from pathlib import Path
 import structlog
 from dotenv import load_dotenv
 
-from .agents.build_model import _validate_create_model_entrypoint
+from .agents.build_model import (
+    _apply_create_model_autofixes,
+    _validate_create_model_entrypoint,
+)
 from .llm import llm_client
 from .prompts import PROMPTS, llm_problem_text
 from .schemas import CodeBlob, ModelPack
@@ -91,6 +94,7 @@ async def run_single_agent_generation(
             validate=True,
             trace_input=trace_input,
         )
+        code = _apply_create_model_autofixes(code)
         valid, diagnostics = _validate_create_model_entrypoint(code)
         if not valid:
             joined = ", ".join(diagnostics)
